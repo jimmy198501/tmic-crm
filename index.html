@@ -118,7 +118,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, collectionGroup, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, collectionGroup, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, runTransaction, writeBatch, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ====== 1. 貼上你的 Firebase 設定（Firebase 主控台 → 專案設定 → 網頁應用程式）======
 const firebaseConfig = {
@@ -271,7 +271,7 @@ async function softRefresh() {
 function renderNav() {
   const h = location.hash || '#/customers';
   const items = [['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
-  if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定']);
+  if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
     return `<a href="${href}" class="${on ? 'active' : ''}">${t}</a>`;
@@ -286,6 +286,7 @@ function route() {
   else if (page === 'records') viewRecords();
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
+  else if (page === 'import' && isAdmin()) viewImport();
   else viewCustomers();
 }
 window.addEventListener('hashchange', route);
@@ -298,11 +299,12 @@ const COLS = [
 ];
 function viewCustomers() {
   const leftN = isAdmin() ? leftCustomers().length : 0;
-  app.innerHTML = `${leftN ? `<div class="card warn"><strong>⚠ 有 ${leftN} 位客戶的負責業務已離職</strong>，請調整負責業務。<button class="small" id="showLeft" style="margin-left:8px">查看名單</button></div>` : ''}<div class="card"><h1>客戶</h1>
+  const checkN = isAdmin() ? [...customers.values()].filter(c => !c.deleted && c.needsCheck).length : 0;
+  app.innerHTML = `${checkN ? `<div class="card warn"><strong>⚠ 有 ${checkN} 位匯入的客戶資料待確認</strong>（編號重複或缺漏）。編輯儲存後就會解除。<button class="small" id="showCheck" style="margin-left:8px">查看名單</button></div>` : ''}${leftN ? `<div class="card warn"><strong>⚠ 有 ${leftN} 位客戶的負責業務已離職</strong>，請調整負責業務。<button class="small" id="showLeft" style="margin-left:8px">查看名單</button></div>` : ''}<div class="card"><h1>客戶</h1>
     <div class="toolbar">
       <div class="seg" id="seg">${[['all', '全部'], ['potential', '潛在'], ['formal', '正式']].map(([k, t]) => `<button data-k="${k}" class="${ui.status === k ? 'on' : ''}">${t}</button>`).join('')}</div>
       <select id="fRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${ui.region === r ? 'selected' : ''}>${r}</option>`).join('')}<option value="__none" ${ui.region === '__none' ? 'selected' : ''}>未分區</option></select>
-      ${me.role !== 'sales' ? `<select id="fSales"><option value="">全部業務</option>${salesOptions(ui.sales)}${isAdmin() ? `<option value="__left" ${ui.sales === '__left' ? 'selected' : ''}>⚠ 負責業務已離職</option>` : ''}</select>` : ''}
+      ${me.role !== 'sales' ? `<select id="fSales"><option value="">全部業務</option>${salesOptions(ui.sales)}${isAdmin() ? `<option value="__left" ${ui.sales === '__left' ? 'selected' : ''}>⚠ 負責業務已離職</option><option value="__check" ${ui.sales === '__check' ? 'selected' : ''}>⚠ 匯入資料待確認</option>` : ''}</select>` : ''}
       <input id="fQ" placeholder="搜尋名稱、編號、聯絡人、電話" value="${esc(ui.q)}">
       <span class="spacer"></span>
       <button class="ghost" id="refresh">重新整理</button>
@@ -312,6 +314,7 @@ function viewCustomers() {
     <div class="tablewrap"><table><thead><tr id="thead"></tr></thead><tbody id="tbody" class="click"></tbody></table></div>
   </div>`;
   $('#showLeft')?.addEventListener('click', () => { ui.sales = '__left'; ui.status = 'all'; viewCustomers(); });
+  $('#showCheck')?.addEventListener('click', () => { ui.sales = '__check'; ui.status = 'all'; viewCustomers(); });
   $('#seg').addEventListener('click', e => { const k = e.target.dataset.k; if (!k) return; ui.status = k; viewCustomers(); });
   $('#fRegion').addEventListener('change', e => { ui.region = e.target.value; renderTable(); });
   $('#fSales')?.addEventListener('change', e => { ui.sales = e.target.value; renderTable(); });
@@ -333,7 +336,7 @@ function renderTable() {
   const list = [...customers.values()].filter(c => !c.deleted)
     .filter(c => ui.status === 'all' || c.status === ui.status)
     .filter(c => !ui.region || (ui.region === '__none' ? !c.region : c.region === ui.region))
-    .filter(c => !ui.sales || (ui.sales === '__left' ? (c.salesEmail && isLeft(c.salesEmail)) : c.salesEmail === ui.sales))
+    .filter(c => !ui.sales || (ui.sales === '__left' ? (c.salesEmail && isLeft(c.salesEmail)) : ui.sales === '__check' ? c.needsCheck : c.salesEmail === ui.sales))
     .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact, c.phone, c.mobile].some(v => String(v || '').toLowerCase().includes(q)));
   const col = COLS.find(c => c[0] === ui.sort) || COLS[0];
   list.sort((a, b) => String(col[2](a) || '').localeCompare(String(col[2](b) || ''), 'zh-Hant', { numeric: true }) * ui.dir);
@@ -363,6 +366,7 @@ function viewCustomer(id) {
       <span class="spacer"></span>
       ${isAdmin() ? `<div class="row-actions"><button class="ghost" id="edit">編輯</button>${c.status === 'potential' ? '<button class="accent" id="conv">轉為正式客戶</button>' : ''}<button class="danger" id="del">刪除</button></div>` : ''}
     </div>
+    ${c.needsCheck ? `<div class="card warn" style="margin-bottom:12px">⚠ 待確認：${esc(c.checkNote)}　（修正後按「編輯」→ 儲存即解除）</div>` : ''}
     <h2>基本資料</h2>
     <div class="grid">
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
@@ -444,7 +448,7 @@ function customerForm(c, preset = {}, onCreated = null) {
           id = ref.id;
         });
       } else {
-        await updateDoc(doc(db, 'customers', cur.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+        await updateDoc(doc(db, 'customers', cur.id), { ...data, needsCheck: false, updatedBy: me.email, updatedAt: serverTimestamp() });
       }
       close();
       await syncCustomers();
@@ -1076,6 +1080,87 @@ function pickCustomer(cb) {
   });
   dlg.showModal();
   dlg.querySelector('#pq').focus();
+}
+
+// ---------------- 資料匯入（管理者）----------------
+async function viewImport() {
+  app.innerHTML = `<div class="card"><h1>資料匯入</h1>
+    <p>選擇 Claude 產生的 <strong>customers_import.json</strong>，先檢查內容，確認後再匯入。</p>
+    <input type="file" id="impFile" accept=".json,application/json" style="max-width:420px">
+    <div id="impBox"></div></div>`;
+  $('#impFile').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    let data;
+    try { data = JSON.parse(await f.text()); if (!Array.isArray(data.records)) throw new Error('格式不對'); }
+    catch (err) { $('#impBox').innerHTML = `<p style="color:var(--danger)">檔案讀取失敗：${esc(errMsg(err))}</p>`; return; }
+    importPreview(data);
+  });
+}
+const slugEmail = n => 'left-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '@import.tmic';
+function matchSales(nameEn) {
+  return [...users.values()].find(u => (u.nameEn || '').trim().toLowerCase() === nameEn.trim().toLowerCase());
+}
+function importPreview(data) {
+  const recs = data.records;
+  const formal = recs.filter(r => r.status === 'formal').length;
+  const check = recs.filter(r => r.needsCheck).length;
+  const existingNos = new Set([...customers.values()].filter(c => !c.deleted).flatMap(c => [c.leadNo, c.formalNo]).filter(Boolean));
+  const clash = recs.filter(r => (r.leadNo && existingNos.has(r.leadNo)) || (r.formalNo && existingNos.has(r.formalNo)));
+  const salesRows = (data.sales || []).map(s => ({ ...s, user: matchSales(s.nameEn), count: recs.filter(r => r.salesName === s.nameEn).length }));
+  $('#impBox').innerHTML = `
+    <h2 style="margin-top:20px">內容檢查</h2>
+    <div class="grid">
+      <div class="field"><label>匯入筆數</label><div class="val">${recs.length} 筆（正式 ${formal}、潛在 ${recs.length - formal}）</div></div>
+      <div class="field"><label>待確認</label><div class="val">${check} 筆（匯入後在客戶頁可篩選）</div></div>
+      <div class="field"><label>編號設定</label><div class="val">${Object.entries(data.counters || {}).map(([k, v]) => `${COUNTERS.find(c => c[0] === k)?.[2] || k} 下一號 ${v}`).join('、')}</div></div>
+    </div>
+    ${clash.length ? `<div class="card warn" style="margin-top:12px">⚠ 系統裡已經有 ${clash.length} 筆<strong>相同編號</strong>的客戶（例：${clash.slice(0, 5).map(r => esc(r.leadNo || r.formalNo)).join('、')}）。<br>如果那些是測試資料，請先到客戶頁刪除，再回來匯入，否則會出現重複編號。</div>` : ''}
+    <h2 style="margin-top:20px">業務對應</h2>
+    <p class="muted">英文名與「人員管理」相同的會自動對應；找不到的會建立成「離職」人員，保留姓名。</p>
+    <div class="tablewrap"><table><thead><tr><th>Notion 業務</th><th>客戶數</th><th>對應結果</th></tr></thead><tbody>
+      ${salesRows.map(s => `<tr><td>${esc(s.nameEn)}</td><td>${s.count}</td><td>${s.user ? `✅ ${esc(salesLabel(s.user.email))}` : `建立離職人員：${esc(s.nameZh || s.nameEn)} ${esc(s.nameEn)}`}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="row-actions" style="margin-top:20px"><button id="impGo">開始匯入</button><span class="muted" id="impMsg"></span></div>`;
+  $('#impGo').onclick = () => runImport(data, salesRows);
+}
+async function runImport(data, salesRows) {
+  if (!confirm(`確定匯入 ${data.records.length} 筆客戶？\n\n同一個檔案重複匯入，會用檔案內容覆蓋之前匯入的同一筆資料。`)) return;
+  const btn = $('#impGo'), msg = $('#impMsg');
+  btn.disabled = true;
+  try {
+    // 1. 業務對應，找不到的建立離職人員
+    const map = {};
+    for (const s of salesRows) {
+      if (s.user) { map[s.nameEn] = s.user.email; continue; }
+      const email = slugEmail(s.nameEn);
+      await setDoc(doc(db, 'users', email), { email, nameZh: s.nameZh || s.nameEn, nameEn: s.nameEn, role: 'sales', regions: [], region: '', alsoEngineer: false, active: false, placeholder: true, updatedBy: me.email, updatedAt: serverTimestamp() }, { merge: true });
+      map[s.nameEn] = email;
+    }
+    // 2. 客戶，每批 200 筆
+    const recs = data.records;
+    for (let i = 0; i < recs.length; i += 200) {
+      const batch = writeBatch(db);
+      for (const r of recs.slice(i, i + 200)) {
+        const { id, salesName, ...rest } = r;
+        batch.set(doc(db, 'customers', id), {
+          ...rest, salesEmail: map[salesName] || '', importedSales: salesName || '', source: 'notion', deleted: false,
+          createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp()
+        });
+      }
+      await batch.commit();
+      msg.textContent = `已匯入 ${Math.min(i + 200, recs.length)} / ${recs.length} 筆…`;
+    }
+    // 3. 編號：只往上調，不往回
+    for (const [k, v] of Object.entries(data.counters || {})) {
+      const s = await getDoc(doc(db, 'counters', k));
+      const cur = s.exists() ? s.data().next : 1;
+      if (v > cur) await setDoc(doc(db, 'counters', k), { next: v });
+    }
+    await syncCustomers(true);
+    msg.textContent = '';
+    alert(`匯入完成：${recs.length} 筆客戶。`);
+    location.hash = '#/customers';
+  } catch (err) { toast('匯入失敗：' + errMsg(err), 10000); btn.disabled = false; }
 }
 
 // ---------------- 人員管理（管理者）----------------
