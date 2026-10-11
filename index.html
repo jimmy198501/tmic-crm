@@ -96,7 +96,7 @@ const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 
-const ROLE = { admin: '管理者', sales: '業務', engineer: '工程師' };
+const ROLE = { admin: '管理者', manager: '業務主管', sales: '業務', engineer: '工程師' };
 const REGIONS = ['台北', '台中', '台南'];
 const REGION_CODE = { '台北': 'A', '台中': 'B', '台南': 'C' };
 const LICENSES = [['serial', '單機綁序號'], ['dongle', '單機綁Dongle'], ['netPc', '網路綁電腦'], ['netDongle', '網路綁Dongle']];
@@ -115,10 +115,11 @@ const $ = s => document.querySelector(s);
 const app = $('#app');
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isAdmin = () => me?.role === 'admin';
+const userRegions = u => Array.isArray(u?.regions) ? u.regions : (u?.region ? [u.region] : []);
 const fmt = (prefix, n) => prefix + String(n).padStart(5, '0');
 const custNo = c => (c.status === 'formal' ? c.formalNo : c.leadNo) || '';
 const salesLabel = email => { const u = users.get(email); return u ? `${u.nameZh || ''}${u.nameEn ? ' ' + u.nameEn : ''}` : (email || ''); };
-const salesOptions = sel => [...users.values()].filter(u => u.role === 'sales')
+const salesOptions = sel => [...users.values()].filter(u => u.role === 'sales' || u.role === 'manager')
   .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
   .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
 
@@ -179,13 +180,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------- 客戶資料同步（只抓有變動的資料，節省讀取額度）----------------
-function customersBaseQuery() {
+function customersBaseQueries() {
   const col = collection(db, 'customers');
-  return me.role === 'sales' ? query(col, where('salesEmail', '==', me.email)) : col;
+  if (me.role === 'sales') return [query(col, where('salesEmail', '==', me.email))];
+  if (me.role === 'manager') {
+    const qs = [query(col, where('salesEmail', '==', me.email))];
+    const regs = userRegions(me);
+    if (regs.length) qs.push(query(col, where('region', 'in', regs)));
+    return qs;
+  }
+  return [col];
 }
-async function syncCustomers(full = false) {
-  const base = customersBaseQuery();
-  if (full) customers.clear();
+async function syncOne(base, full) {
   let max = null;
   if (!full) {
     try {
@@ -199,6 +205,10 @@ async function syncCustomers(full = false) {
   }
   const snap = await getDocs(max ? query(base, where('updatedAt', '>', max)) : base);
   snap.docs.forEach(d => customers.set(d.id, { id: d.id, ...d.data() }));
+}
+async function syncCustomers(full = false) {
+  if (full) customers.clear();
+  for (const base of customersBaseQueries()) await syncOne(base, full);
   lastSync = Date.now();
 }
 async function softRefresh() {
@@ -423,13 +433,13 @@ async function deleteCustomer(c) {
 
 // ---------------- 人員管理（管理者）----------------
 function viewUsers() {
-  const order = { admin: 0, sales: 1, engineer: 2 };
+  const order = { admin: 0, manager: 1, sales: 2, engineer: 3 };
   const list = [...users.values()].sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'));
   app.innerHTML = `<div class="card">
     <div class="toolbar"><h1 style="margin:0">人員管理</h1><span class="spacer"></span><button id="addU">＋ 新增人員</button></div>
     <p class="muted">人員用這裡登記的 Google 帳號登入即可使用；刪除後立即無法存取。</p>
     <div class="tablewrap"><table><thead><tr><th>中文名</th><th>英文名</th><th>Google 帳號</th><th>角色</th><th>區域</th><th></th></tr></thead>
-    <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${ROLE[u.role] || esc(u.role)}</td><td>${esc(u.region)}</td>
+    <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${ROLE[u.role] || esc(u.role)}</td><td>${esc(userRegions(u).join('、'))}</td>
       <td class="row-actions"><button class="ghost" data-a="edit">編輯</button>${u.email === me.email ? '' : '<button class="danger" data-a="del">刪除</button>'}</td></tr>`).join('')}</tbody></table></div>
     <p class="muted">共 ${list.length} 人</p>
   </div>`;
@@ -448,7 +458,8 @@ function viewUsers() {
 
 function userForm(u) {
   const isNew = !u;
-  const cur = u || { role: 'sales', region: '' };
+  const cur = u || { role: 'sales', regions: [] };
+  const curRegs = userRegions(cur);
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<form id="uf"><h1>${isNew ? '新增人員' : '編輯人員'}</h1>
     <div class="grid">
@@ -456,7 +467,7 @@ function userForm(u) {
       <div class="field"><label>中文名 *</label><input name="nameZh" value="${esc(cur.nameZh)}"></div>
       <div class="field"><label>英文名</label><input name="nameEn" value="${esc(cur.nameEn)}"></div>
       <div class="field"><label>角色 *</label><select name="role">${Object.entries(ROLE).map(([k, t]) => `<option value="${k}" ${cur.role === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-      <div class="field"><label>區域</label><select name="region"><option value="">（不指定）</option>${REGIONS.map(r => `<option ${cur.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div class="field"><label>負責區域（可多選）</label><div class="checks">${REGIONS.map(r => `<label><input type="checkbox" name="reg" value="${r}" ${curRegs.includes(r) ? 'checked' : ''}>${r}</label>`).join('')}</div><div class="muted">業務主管可看到所勾區域的全部客戶</div></div>
     </div>
     ${isNew ? '' : '<p class="muted">要更換 Google 帳號，請刪除後重新新增。</p>'}
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div>
@@ -472,12 +483,13 @@ function userForm(u) {
     const nameZh = form.nameZh.value.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('請輸入正確的 Google 帳號');
     if (!nameZh) return toast('請填寫中文名');
+    if (form.role.value === 'manager' && !form.querySelector('input[name=reg]:checked')) return toast('業務主管至少要勾選一個負責區域');
     if (isNew && users.has(email)) return toast('這個帳號已經在名單中');
     if (!isNew && email === me.email && form.role.value !== 'admin' && !confirm('你正在移除自己的管理者權限，確定嗎？')) return;
     dlg.querySelector('#save').disabled = true;
     try {
       await setDoc(doc(db, 'users', email), {
-        email, nameZh, nameEn: form.nameEn.value.trim(), role: form.role.value, region: form.region.value,
+        email, nameZh, nameEn: form.nameEn.value.trim(), role: form.role.value, regions: [...form.querySelectorAll('input[name=reg]:checked')].map(i => i.value), region: '',
         active: true, updatedBy: me.email, updatedAt: serverTimestamp()
       }, { merge: true });
       close(); toast('已儲存');
