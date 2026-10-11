@@ -116,7 +116,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, collectionGroup, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ====== 1. 貼上你的 Firebase 設定（Firebase 主控台 → 專案設定 → 網頁應用程式）======
 const firebaseConfig = {
@@ -266,7 +266,7 @@ async function softRefresh() {
 // ---------------- 路由 ----------------
 function renderNav() {
   const h = location.hash || '#/customers';
-  const items = [['#/customers', '客戶'], ['#/calendar', '行事曆']];
+  const items = [['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
   if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
@@ -279,6 +279,7 @@ function route() {
   const [, page, id] = (location.hash || '#/customers').split('/');
   if (page === 'customer' && id) viewCustomer(decodeURIComponent(id));
   else if (page === 'calendar') viewCalendar();
+  else if (page === 'records') viewRecords();
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else viewCustomers();
@@ -711,7 +712,9 @@ const evColor = x => x.type === 'leave' ? 'leave' : x.region === '台北' ? 'nor
 
 function afterRecordChange(c) {
   if (c?.id) recCache.delete(c.id);
+  recsCache.clear();
   if (location.hash.startsWith('#/calendar')) viewCalendar();
+  else if (location.hash.startsWith('#/records')) viewRecords();
   else if (c) showRecords(c, true);
 }
 async function loadMonth(ym) {
@@ -885,6 +888,129 @@ function scheduleForm(r, preset = {}) {
     } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
   dlg.showModal();
+}
+
+// ---------------- 紀錄（跨客戶集中填寫、審核）----------------
+const RTABS = [
+  ['sdemo', '業務 Demo', 'demos', 'sales'],
+  ['edemo', '工程師 Demo', 'demos', 'engineer'],
+  ['purchases', '採購紀錄', 'purchases'],
+  ['issues', '問題追蹤', 'issues'],
+  ['installs', '工程師安裝紀錄', 'installs']
+];
+const seesAllRecs = () => isAdmin() || isEngineer();
+const recsUI = { tab: 'sdemo', ym: new Date().toLocaleDateString('sv-SE').slice(0, 7), region: '', sales: '', engineer: '', q: '', sort: 'date', dir: -1 };
+const recsCache = new Map(); // `${collection}|${ym}` -> rows
+
+async function loadRecsMonth(col, ym) {
+  const key = col + '|' + ym;
+  if (recsCache.has(key)) return recsCache.get(key);
+  const range = [where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')];
+  const snap = await getDocs(col === 'demos' ? query(collection(db, 'demos'), ...range) : query(collectionGroup(db, col), ...range));
+  const rows = snap.docs.map(d => ({ id: d.id, ...d.data(), customerId: d.data().customerId || d.ref.parent.parent?.id }));
+  recsCache.set(key, rows);
+  return rows;
+}
+function recCustomer(r) {
+  return customers.get(r.customerId) || { id: r.customerId, name: r.customerName || '（無權限檢視的客戶）', status: 'formal', formalNo: r.customerNo || '', region: r.region || '', salesEmail: r.salesEmail || '' };
+}
+const linkify = t => esc(t).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+
+async function viewRecords() {
+  const tabs = RTABS.filter(t => t[2] === 'demos' || seesAllRecs());
+  if (!tabs.find(t => t[0] === recsUI.tab)) recsUI.tab = tabs[0][0];
+  const [tabKey, tabTitle, col, demoType] = tabs.find(t => t[0] === recsUI.tab);
+  const R = REC[col];
+  app.innerHTML = `<div class="card"><h1>紀錄</h1><p class="muted">載入中…</p></div>`;
+  let rows;
+  try { rows = await loadRecsMonth(col, recsUI.ym); }
+  catch (e) { app.innerHTML = `<div class="card"><h1>紀錄</h1><p>載入失敗：${linkify(errMsg(e))}</p><p class="muted">若訊息裡有連結，請用管理者帳號點開並建立索引，幾分鐘後再重新整理。</p></div>`; return; }
+  if (!location.hash.startsWith('#/records')) return;
+  const q = recsUI.q.trim().toLowerCase();
+  const list = rows.filter(r => !demoType || r.type === demoType).map(r => ({ r, c: recCustomer(r) }))
+    .filter(({ r, c }) => !recsUI.region || (c.region || r.region) === recsUI.region)
+    .filter(({ r, c }) => !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
+    .filter(({ r }) => !recsUI.engineer || r.engineerEmail === recsUI.engineer)
+    .filter(({ r, c }) => !q || [c.name, custNo(c), ...R.cols.map(([f]) => r[f])].some(v => String(v || '').toLowerCase().includes(q)));
+  const val = ({ r, c }, k) => k === 'customer' ? (c.name || '') : k === 'createdBy' ? salesLabel(r.createdBy) : String((R.cols.find(x => x[0] === k)?.[2] || (x => x[k]))(r) ?? '');
+  list.sort((a, b) => val(a, recsUI.sort).localeCompare(val(b, recsUI.sort), 'zh-Hant', { numeric: true }) * recsUI.dir);
+  const cols = [R.cols[0], ['customer', '客戶'], ...R.cols.slice(1).filter(([f]) => f !== 'type')];
+  const cell = ({ r, c }, [f, , fn, wrap]) => {
+    if (f === 'customer') return `<td>${customers.has(r.customerId) ? `<a href="#/customer/${encodeURIComponent(r.customerId)}">${esc(custNo(c))} ${esc(c.name)}</a>` : `${esc(custNo(c))} ${esc(c.name)}`}</td>`;
+    if (f === 'files') return `<td class="files">${(r.files || []).map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>`).join('') || '—'}</td>`;
+    if (f === 'link' && r.link) return `<td><a href="${esc(r.link)}" target="_blank" rel="noopener">開啟</a></td>`;
+    const v = fn ? fn(r) : r[f];
+    return `<td class="${wrap ? 'wrap' : ''}">${esc(v) || '—'}</td>`;
+  };
+  const [y, m] = recsUI.ym.split('-').map(Number);
+  const isDemo = col === 'demos';
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><h1 style="margin:0">紀錄</h1><span class="spacer"></span>${R.canAdd() ? '<button id="addR">＋ 新增' + tabTitle + '</button>' : ''}</div>
+    <div class="toolbar"><div class="seg" id="rtabs">${tabs.map(([k, t]) => `<button data-t="${k}" class="${recsUI.tab === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
+    <div class="toolbar">
+      <button class="ghost small" id="rprev">‹</button><button class="ghost small" id="rnow">本月</button><button class="ghost small" id="rnext">›</button>
+      <strong style="margin:0 8px">${y} 年 ${m} 月</strong>
+      <span class="spacer"></span>
+      <select id="rRegion"><option value="">全部區域</option>${REGIONS.map(x => `<option ${recsUI.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+      <select id="rSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], recsUI.sales)}</select>
+      ${isDemo ? `<select id="rEng"><option value="">全部工程師</option>${userOptions(['engineer'], recsUI.engineer)}</select>` : ''}
+      <input id="rQ" placeholder="搜尋客戶、內容" value="${esc(recsUI.q)}" style="max-width:200px">
+      <button class="ghost small" id="rRefresh">重新整理</button>
+    </div>
+    <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆</div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr id="rhead">${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th><th></th></tr></thead>
+    <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}">${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td>
+      <td class="row-actions">${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">這個月沒有紀錄</p>'}
+  </div>`;
+  const moveM = n => { const d = new Date(y, m - 1 + n, 1); recsUI.ym = d.toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
+  $('#rprev').onclick = () => moveM(-1); $('#rnext').onclick = () => moveM(1);
+  $('#rnow').onclick = () => { recsUI.ym = new Date().toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
+  $('#rtabs').onclick = e => { const t = e.target.dataset.t; if (t) { recsUI.tab = t; viewRecords(); } };
+  $('#rRegion').onchange = e => { recsUI.region = e.target.value; viewRecords(); };
+  $('#rSales').onchange = e => { recsUI.sales = e.target.value; viewRecords(); };
+  if ($('#rEng')) $('#rEng').onchange = e => { recsUI.engineer = e.target.value; viewRecords(); };
+  $('#rQ').onchange = e => { recsUI.q = e.target.value; viewRecords(); };
+  $('#rRefresh').onclick = () => { recsCache.clear(); viewRecords(); };
+  $('#addR')?.addEventListener('click', () => pickCustomer(c => recordForm(col, c, null, isDemo ? { type: demoType } : {})));
+  $('#rhead')?.addEventListener('click', e => {
+    const k = e.target.closest('th')?.dataset.k; if (!k) return;
+    if (recsUI.sort === k) recsUI.dir = -recsUI.dir; else { recsUI.sort = k; recsUI.dir = 1; }
+    viewRecords();
+  });
+  $('#rbody')?.addEventListener('click', async e => {
+    const act = e.target.dataset.act; if (!act) return;
+    const it = list[Number(e.target.closest('tr').dataset.i)];
+    if (act === 'edit') recordForm(col, it.c, it.r);
+    if (act === 'del') {
+      if (!confirm(`確定刪除這筆${R.title}？`)) return;
+      try { await deleteDoc(doc(recCol(col, it.c), it.r.id)); toast('已刪除'); afterRecordChange(it.c); } catch (err) { toast(errMsg(err)); }
+    }
+  });
+}
+
+function pickCustomer(cb) {
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<h1>選擇客戶</h1><input id="pq" placeholder="輸入名稱、編號、聯絡人搜尋（潛在、正式客戶都可選）"><div class="pick" id="plist"></div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="pc">取消</button></div>`;
+  document.body.appendChild(dlg);
+  const draw = () => {
+    const q = dlg.querySelector('#pq').value.trim().toLowerCase();
+    const list = [...customers.values()].filter(c => !c.deleted)
+      .filter(c => !q || [custNo(c), c.leadNo, c.formalNo, c.name, c.contact].some(v => String(v || '').toLowerCase().includes(q)))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant')).slice(0, 50);
+    dlg.querySelector('#plist').innerHTML = list.map(c => `<div data-id="${esc(c.id)}"><strong>${esc(custNo(c))}</strong>　${esc(c.name)} <span class="tag ${c.status === 'formal' ? 'formal' : 'potential'}">${c.status === 'formal' ? '正式' : '潛在'}</span> <span class="muted">${esc(c.region)}</span></div>`).join('') || '<p class="muted">找不到客戶</p>';
+  };
+  draw();
+  dlg.querySelector('#pq').addEventListener('input', draw);
+  dlg.querySelector('#pc').onclick = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#plist').addEventListener('click', e => {
+    const id = e.target.closest('[data-id]')?.dataset.id; if (!id) return;
+    dlg.close(); dlg.remove();
+    cb(customers.get(id));
+  });
+  dlg.showModal();
+  dlg.querySelector('#pq').focus();
 }
 
 // ---------------- 人員管理（管理者）----------------
