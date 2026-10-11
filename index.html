@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TMIC CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#1F2A66;--navy-2:#2B3880;--purple:#7F1085;--ink:#1f2328;--muted:#3D4E56;--line:#e3e6ee;--bg:#f5f6fa;--card:#fff;--danger:#c0392b}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Noto Sans TC',system-ui,sans-serif;color:var(--ink);background:var(--bg);font-size:15px}
+a{color:var(--navy)}
+header{background:#fff;border-bottom:3px solid var(--navy);display:flex;align-items:center;gap:24px;padding:0 24px;min-height:60px;position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:baseline;gap:6px;font-weight:700;color:var(--navy);font-size:24px;letter-spacing:.5px}
+.brand .dot{color:var(--purple)}
+.brand small{font-size:13px;color:var(--purple);font-weight:500;letter-spacing:1px}
+nav{display:flex;gap:4px;flex:1;flex-wrap:wrap}
+nav a{padding:8px 14px;border-radius:8px;color:var(--muted);text-decoration:none;font-weight:500}
+nav a.active{background:var(--navy);color:#fff}
+.me{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px}
+main{max-width:1200px;margin:0 auto;padding:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+h1{font-size:20px;color:var(--navy);margin:0 0 16px}
+h2{font-size:16px;color:var(--navy);margin:0 0 12px;padding-left:10px;border-left:4px solid var(--purple)}
+button{font:inherit;border:1px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;padding:8px 16px;cursor:pointer;font-weight:500}
+button.ghost{background:#fff;color:var(--navy)}
+button.accent{background:var(--purple);border-color:var(--purple)}
+button.danger{background:#fff;color:var(--danger);border-color:var(--danger)}
+button:disabled{opacity:.5;cursor:not-allowed}
+input,select,textarea{font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%;background:#fff;color:var(--ink)}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--navy-2);outline-offset:-1px}
+input:disabled{background:#f3f4f7}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.toolbar input{max-width:260px}
+.toolbar select{width:auto}
+.spacer{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:#fff;color:var(--muted);padding:7px 14px}
+.seg button.on{background:var(--navy);color:#fff}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:500;background:#fafbfd}
+th.sortable{cursor:pointer;user-select:none}
+th .arrow{color:var(--purple)}
+tbody.click tr{cursor:pointer}
+tbody.click tr:hover{background:#f3f4fb}
+.tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:500}
+.tag.potential{background:#f1e6f4;color:var(--purple)}
+.tag.formal{background:#e5e8f5;color:var(--navy)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px 20px}
+.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.field .val{min-height:22px;word-break:break-all}
+.checks{display:flex;flex-wrap:wrap;gap:16px}
+.checks label{display:flex;align-items:center;gap:6px;font-size:14px}
+.checks input{width:auto}
+.row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.muted{color:var(--muted);font-size:13px}
+.center{min-height:75vh;display:flex;align-items:center;justify-content:center}
+.login{text-align:center;max-width:400px;width:100%}
+.login .brand{justify-content:center;font-size:36px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:8px;display:none;z-index:50;max-width:90vw}
+dialog{border:0;border-radius:12px;padding:24px;max-width:760px;width:calc(100% - 32px)}
+dialog::backdrop{background:rgba(20,24,50,.45)}
+.hidden{display:none!important}
+@media (max-width:640px){header{padding:8px 12px;gap:10px;flex-wrap:wrap}main{padding:16px 12px}.toolbar input{max-width:none}}
+</style>
+</head>
+<body>
+<header id="hdr" class="hidden">
+  <div class="brand">tmic<span class="dot">.</span><small>CRM</small></div>
+  <nav id="nav"></nav>
+  <div class="me"><span id="meName"></span><button class="ghost" id="logout">登出</button></div>
+</header>
+<main id="app"></main>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+// ====== 1. 貼上你的 Firebase 設定（Firebase 主控台 → 專案設定 → 網頁應用程式）======
+const firebaseConfig = {
+  apiKey: "AIzaSyAOCdAhjVrrO62dBATA4e7M0QEDDxo6sx4",
+  authDomain: "tmic-crm-eeac3.firebaseapp.com",
+  projectId: "tmic-crm-eeac3",
+  storageBucket: "tmic-crm-eeac3.firebasestorage.app",
+  messagingSenderId: "202695859419",
+  appId: "1:202695859419:web:76d5a9799fc2c6a00300fe"
+};
+// ==========================================================================
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+
+const ROLE = { admin: '管理者', sales: '業務', engineer: '工程師' };
+const REGIONS = ['台北', '台中', '台南'];
+const REGION_CODE = { '台北': 'A', '台中': 'B', '台南': 'C' };
+const LICENSES = [['serial', '單機綁序號'], ['dongle', '單機綁Dongle'], ['netPc', '網路綁電腦'], ['netDongle', '網路綁Dongle']];
+const COMMON = [['name', '客戶名稱', true], ['companyProduct', '公司產品（客戶本業）'], ['industry', '行業別'], ['address', '公司地址'], ['currentSoftware', '現用軟體'], ['contact', '聯絡人'], ['phone', '電話'], ['mobile', '行動電話'], ['email', 'E-Mail']];
+const COUNTERS = [['lead_A', '台北潛在客戶', 'L-A'], ['lead_B', '台中潛在客戶', 'L-B'], ['lead_C', '台南潛在客戶', 'L-C'], ['formal', '正式客戶', 'C']];
+
+let me = null;
+const users = new Map();
+const customers = new Map();
+let lastSync = 0;
+let unsubUsers = null;
+let timer = null;
+const ui = { status: 'all', region: '', sales: '', q: '', sort: 'no', dir: 1 };
+
+const $ = s => document.querySelector(s);
+const app = $('#app');
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isAdmin = () => me?.role === 'admin';
+const fmt = (prefix, n) => prefix + String(n).padStart(5, '0');
+const custNo = c => (c.status === 'formal' ? c.formalNo : c.leadNo) || '';
+const salesLabel = email => { const u = users.get(email); return u ? `${u.nameZh || ''}${u.nameEn ? ' ' + u.nameEn : ''}` : (email || ''); };
+const salesOptions = sel => [...users.values()].filter(u => u.role === 'sales')
+  .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
+  .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = 'none'), 3000);
+}
+function errMsg(e) {
+  if (e?.code === 'permission-denied') return '權限不足，無法執行';
+  return e?.message || String(e);
+}
+
+// ---------------- 登入 ----------------
+function viewLogin(msg) {
+  $('#hdr').classList.add('hidden');
+  app.innerHTML = `<div class="center"><div class="card login">
+    <div class="brand">tmic<span class="dot">.</span><small>CRM</small></div>
+    <p class="muted">明日國際 客戶管理系統</p>
+    ${msg ? `<p style="color:var(--danger)">${esc(msg)}</p><button class="ghost" id="switch">切換帳號</button>` : '<button id="gl">使用 Google 帳號登入</button>'}
+  </div></div>`;
+  $('#gl')?.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => toast(errMsg(e))));
+  $('#switch')?.addEventListener('click', async () => { await signOut(auth); signInWithPopup(auth, new GoogleAuthProvider()).catch(e => toast(errMsg(e))); });
+}
+
+$('#logout').addEventListener('click', () => signOut(auth));
+
+onAuthStateChanged(auth, async u => {
+  me = null; customers.clear(); users.clear();
+  if (unsubUsers) { unsubUsers(); unsubUsers = null; }
+  if (timer) { clearInterval(timer); timer = null; }
+  if (!u) { viewLogin(); return; }
+  const email = (u.email || '').toLowerCase();
+  let snap = null;
+  try { snap = await getDoc(doc(db, 'users', email)); } catch (e) { snap = null; }
+  if (!snap || !snap.exists() || snap.data().active === false) {
+    viewLogin(`${email} 尚未開通，請聯絡管理者加入人員名單。`);
+    return;
+  }
+  me = { ...snap.data(), email };
+  $('#hdr').classList.remove('hidden');
+  $('#meName').textContent = `${me.nameZh || email}（${ROLE[me.role] || me.role}）`;
+  app.innerHTML = '<div class="card"><p class="muted">載入資料中…</p></div>';
+
+  unsubUsers = onSnapshot(collection(db, 'users'), s => {
+    users.clear();
+    s.forEach(d => users.set(d.id, { ...d.data(), email: d.id }));
+    if (me && !users.has(me.email)) { signOut(auth); return; }
+    if (!document.querySelector('dialog[open]')) route();
+  });
+
+  try { await syncCustomers(); } catch (e) { toast(errMsg(e)); }
+  route();
+  timer = setInterval(() => softRefresh(), 5 * 60 * 1000);
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && me && Date.now() - lastSync > 60 * 1000) softRefresh();
+});
+
+// ---------------- 客戶資料同步（只抓有變動的資料，節省讀取額度）----------------
+function customersBaseQuery() {
+  const col = collection(db, 'customers');
+  return me.role === 'sales' ? query(col, where('salesEmail', '==', me.email)) : col;
+}
+async function syncCustomers(full = false) {
+  const base = customersBaseQuery();
+  if (full) customers.clear();
+  let max = null;
+  if (!full) {
+    try {
+      const cached = await getDocsFromCache(base);
+      cached.docs.forEach(d => {
+        const data = d.data();
+        customers.set(d.id, { id: d.id, ...data });
+        if (!d.metadata.hasPendingWrites && data.updatedAt && (!max || data.updatedAt.toMillis() > max.toMillis())) max = data.updatedAt;
+      });
+    } catch (e) { /* 沒有快取時改抓全部 */ }
+  }
+  const snap = await getDocs(max ? query(base, where('updatedAt', '>', max)) : base);
+  snap.docs.forEach(d => customers.set(d.id, { id: d.id, ...d.data() }));
+  lastSync = Date.now();
+}
+async function softRefresh() {
+  try { await syncCustomers(); if (!document.querySelector('dialog[open]')) route(); } catch (e) { /* 背景更新失敗時不打擾使用者 */ }
+}
+
+// ---------------- 路由 ----------------
+function renderNav() {
+  const h = location.hash || '#/customers';
+  const items = [['#/customers', '客戶']];
+  if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定']);
+  $('#nav').innerHTML = items.map(([href, t]) => {
+    const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
+    return `<a href="${href}" class="${on ? 'active' : ''}">${t}</a>`;
+  }).join('');
+}
+function route() {
+  if (!me) return;
+  renderNav();
+  const [, page, id] = (location.hash || '#/customers').split('/');
+  if (page === 'customer' && id) viewCustomer(decodeURIComponent(id));
+  else if (page === 'users' && isAdmin()) viewUsers();
+  else if (page === 'settings' && isAdmin()) viewSettings();
+  else viewCustomers();
+}
+window.addEventListener('hashchange', route);
+
+// ---------------- 客戶列表 ----------------
+const COLS = [
+  ['no', '編號', custNo], ['name', '客戶名稱', c => c.name], ['status', '狀態', c => c.status],
+  ['region', '區域', c => c.region], ['sales', '負責業務', c => salesLabel(c.salesEmail)],
+  ['contact', '聯絡人', c => c.contact], ['phone', '電話', c => c.phone], ['maint', '維護日期', c => c.maintenanceDate]
+];
+function viewCustomers() {
+  app.innerHTML = `<div class="card"><h1>客戶</h1>
+    <div class="toolbar">
+      <div class="seg" id="seg">${[['all', '全部'], ['potential', '潛在'], ['formal', '正式']].map(([k, t]) => `<button data-k="${k}" class="${ui.status === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <select id="fRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${ui.region === r ? 'selected' : ''}>${r}</option>`).join('')}<option value="__none" ${ui.region === '__none' ? 'selected' : ''}>未分區</option></select>
+      ${me.role !== 'sales' ? `<select id="fSales"><option value="">全部業務</option>${salesOptions(ui.sales)}</select>` : ''}
+      <input id="fQ" placeholder="搜尋名稱、編號、聯絡人、電話" value="${esc(ui.q)}">
+      <span class="spacer"></span>
+      <button class="ghost" id="refresh">重新整理</button>
+      ${isAdmin() ? '<button id="add">＋ 新增客戶</button>' : ''}
+    </div>
+    <div class="muted" id="count"></div>
+    <div class="tablewrap"><table><thead><tr id="thead"></tr></thead><tbody id="tbody" class="click"></tbody></table></div>
+  </div>`;
+  $('#seg').addEventListener('click', e => { const k = e.target.dataset.k; if (!k) return; ui.status = k; viewCustomers(); });
+  $('#fRegion').addEventListener('change', e => { ui.region = e.target.value; renderTable(); });
+  $('#fSales')?.addEventListener('change', e => { ui.sales = e.target.value; renderTable(); });
+  $('#fQ').addEventListener('input', e => { ui.q = e.target.value; renderTable(); });
+  $('#refresh').addEventListener('click', async () => {
+    try { await syncCustomers(true); renderTable(); toast('已重新整理'); } catch (e) { toast(errMsg(e)); }
+  });
+  $('#add')?.addEventListener('click', () => customerForm(null));
+  $('#thead').addEventListener('click', e => {
+    const k = e.target.closest('th')?.dataset.k; if (!k) return;
+    if (ui.sort === k) ui.dir = -ui.dir; else { ui.sort = k; ui.dir = 1; }
+    renderTable();
+  });
+  $('#tbody').addEventListener('click', e => { const id = e.target.closest('tr')?.dataset.id; if (id) location.hash = '#/customer/' + encodeURIComponent(id); });
+  renderTable();
+}
+function renderTable() {
+  const q = ui.q.trim().toLowerCase();
+  const list = [...customers.values()].filter(c => !c.deleted)
+    .filter(c => ui.status === 'all' || c.status === ui.status)
+    .filter(c => !ui.region || (ui.region === '__none' ? !c.region : c.region === ui.region))
+    .filter(c => !ui.sales || c.salesEmail === ui.sales)
+    .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact, c.phone, c.mobile].some(v => String(v || '').toLowerCase().includes(q)));
+  const col = COLS.find(c => c[0] === ui.sort) || COLS[0];
+  list.sort((a, b) => String(col[2](a) || '').localeCompare(String(col[2](b) || ''), 'zh-Hant', { numeric: true }) * ui.dir);
+  $('#thead').innerHTML = COLS.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${ui.sort === k ? `<span class="arrow">${ui.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('');
+  $('#tbody').innerHTML = list.map(c => `<tr data-id="${esc(c.id)}">
+    <td>${esc(custNo(c))}</td><td>${esc(c.name)}</td>
+    <td><span class="tag ${c.status === 'formal' ? 'formal' : 'potential'}">${c.status === 'formal' ? '正式' : '潛在'}</span></td>
+    <td>${esc(c.region)}</td><td>${esc(salesLabel(c.salesEmail))}</td><td>${esc(c.contact)}</td><td>${esc(c.phone)}</td><td>${esc(c.maintenanceDate)}</td>
+  </tr>`).join('') || '<tr><td colspan="8" class="muted">沒有資料</td></tr>';
+  $('#count').textContent = `共 ${list.length} 筆`;
+}
+
+// ---------------- 客戶詳細頁 ----------------
+function viewCustomer(id) {
+  const c = customers.get(id);
+  if (!c || c.deleted) {
+    app.innerHTML = '<div class="card"><p>找不到這位客戶，或你沒有檢視權限。</p><a href="#/customers">← 回客戶列表</a></div>';
+    return;
+  }
+  const f = (label, val) => `<div class="field"><label>${label}</label><div class="val">${esc(val) || '<span class="muted">—</span>'}</div></div>`;
+  const lic = LICENSES.filter(([k]) => c.license?.[k]).map(([, t]) => t).join('、');
+  app.innerHTML = `<p><a href="#/customers">← 客戶列表</a></p>
+  <div class="card">
+    <div class="toolbar">
+      <h1 style="margin:0">${esc(custNo(c))}　${esc(c.name)}</h1>
+      <span class="tag ${c.status === 'formal' ? 'formal' : 'potential'}">${c.status === 'formal' ? '正式客戶' : '潛在客戶'}</span>
+      <span class="spacer"></span>
+      ${isAdmin() ? `<div class="row-actions"><button class="ghost" id="edit">編輯</button>${c.status === 'potential' ? '<button class="accent" id="conv">轉為正式客戶</button>' : ''}<button class="danger" id="del">刪除</button></div>` : ''}
+    </div>
+    <h2>基本資料</h2>
+    <div class="grid">
+      ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
+      ${COMMON.slice(1).map(([k, t]) => f(t, c[k])).join('')}
+    </div>
+    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('購買產品', c.purchasedProduct)}${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}</div>` : ''}
+  </div>
+  <div class="card"><h2>關聯紀錄</h2><p class="muted">採購紀錄、問題追蹤、工程師安裝紀錄、Demo 紀錄將在下一版加入。</p></div>`;
+  $('#edit')?.addEventListener('click', () => customerForm(c));
+  $('#conv')?.addEventListener('click', () => convertToFormal(c));
+  $('#del')?.addEventListener('click', () => deleteCustomer(c));
+}
+
+// ---------------- 新增／編輯客戶 ----------------
+function customerForm(c) {
+  const isNew = !c;
+  const cur = c || { status: 'potential', license: {} };
+  const inp = (k, t, req) => `<div class="field"><label>${t}${req ? ' *' : ''}</label><input name="${k}" value="${esc(cur[k])}"></div>`;
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form id="cf">
+    <h1>${isNew ? '新增客戶' : `編輯客戶　${esc(custNo(cur))}`}</h1>
+    <div class="grid">
+      ${isNew ? '<div class="field"><label>類型 *</label><select name="status"><option value="potential">潛在客戶</option><option value="formal">正式客戶</option></select></div>' : ''}
+      <div class="field"><label>區域</label><select name="region"><option value="">（未分區）</option>${REGIONS.map(r => `<option ${cur.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div class="field"><label>負責業務</label><select name="salesEmail"><option value="">（未指定）</option>${salesOptions(cur.salesEmail)}</select></div>
+      ${COMMON.map(([k, t, r]) => inp(k, t, r)).join('')}
+    </div>
+    <div id="formalPart">
+      <h2 style="margin-top:20px">產品與授權</h2>
+      <div class="grid">${inp('purchasedProduct', '購買產品')}<div class="field"><label>維護日期</label><input type="date" name="maintenanceDate" value="${esc(cur.maintenanceDate)}"></div></div>
+      <div class="checks" style="margin-top:12px">${LICENSES.map(([k, t]) => `<label><input type="checkbox" name="lic_${k}" ${cur.license?.[k] ? 'checked' : ''}>${t}</label>`).join('')}</div>
+    </div>
+    <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
+      <button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button>
+    </div>
+  </form>`;
+  document.body.appendChild(dlg);
+  const form = dlg.querySelector('#cf');
+  const statusNow = () => isNew ? form.status.value : cur.status;
+  const togglePart = () => dlg.querySelector('#formalPart').classList.toggle('hidden', statusNow() !== 'formal');
+  togglePart();
+  if (isNew) form.status.addEventListener('change', togglePart);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#cancel').addEventListener('click', close);
+  dlg.addEventListener('cancel', () => dlg.remove());
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const status = statusNow();
+    const data = {};
+    COMMON.forEach(([k]) => (data[k] = String(fd.get(k) || '').trim()));
+    data.region = fd.get('region') || '';
+    data.salesEmail = fd.get('salesEmail') || '';
+    if (status === 'formal') {
+      data.purchasedProduct = String(fd.get('purchasedProduct') || '').trim();
+      data.maintenanceDate = fd.get('maintenanceDate') || '';
+      data.license = Object.fromEntries(LICENSES.map(([k]) => [k, fd.get('lic_' + k) === 'on']));
+    }
+    if (!data.name) return toast('請填寫客戶名稱');
+    if (isNew && status === 'potential' && !data.region) return toast('潛在客戶必須選擇區域（用來產生 L 編號）');
+    dlg.querySelector('#save').disabled = true;
+    try {
+      let id = cur.id;
+      if (isNew) {
+        await runTransaction(db, async tx => {
+          const key = status === 'formal' ? 'formal' : 'lead_' + REGION_CODE[data.region];
+          const cref = doc(db, 'counters', key);
+          const s = await tx.get(cref);
+          const n = s.exists() ? s.data().next : 1;
+          const ref = doc(collection(db, 'customers'));
+          tx.set(cref, { next: n + 1 });
+          tx.set(ref, {
+            ...data, status,
+            leadNo: status === 'potential' ? fmt('L-' + REGION_CODE[data.region], n) : '',
+            formalNo: status === 'formal' ? fmt('C', n) : '',
+            deleted: false, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp()
+          });
+          id = ref.id;
+        });
+      } else {
+        await updateDoc(doc(db, 'customers', cur.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+      }
+      close();
+      await syncCustomers();
+      toast('已儲存');
+      if (isNew) location.hash = '#/customer/' + encodeURIComponent(id); else route();
+    } catch (err) {
+      toast(errMsg(err));
+      dlg.querySelector('#save').disabled = false;
+    }
+  });
+  dlg.showModal();
+}
+
+async function convertToFormal(c) {
+  if (!confirm(`確定將 ${c.leadNo} ${c.name} 轉為正式客戶？\n系統會產生新的 C 編號，原 L 編號保留。`)) return;
+  try {
+    await runTransaction(db, async tx => {
+      const cref = doc(db, 'counters', 'formal');
+      const ref = doc(db, 'customers', c.id);
+      const s = await tx.get(cref);
+      const cs = await tx.get(ref);
+      if (!cs.exists() || cs.data().status !== 'potential') throw new Error('此客戶已不是潛在客戶');
+      const n = s.exists() ? s.data().next : 1;
+      tx.set(cref, { next: n + 1 });
+      tx.update(ref, { status: 'formal', formalNo: fmt('C', n), convertedAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() });
+    });
+    await syncCustomers();
+    route();
+    toast('已轉為正式客戶，請補填產品與授權資料');
+    customerForm(customers.get(c.id));
+  } catch (e) { toast(errMsg(e)); }
+}
+
+async function deleteCustomer(c) {
+  if (!confirm(`確定刪除 ${custNo(c)} ${c.name}？`)) return;
+  try {
+    await updateDoc(doc(db, 'customers', c.id), { deleted: true, updatedBy: me.email, updatedAt: serverTimestamp() });
+    await syncCustomers();
+    toast('已刪除');
+    location.hash = '#/customers';
+  } catch (e) { toast(errMsg(e)); }
+}
+
+// ---------------- 人員管理（管理者）----------------
+function viewUsers() {
+  const order = { admin: 0, sales: 1, engineer: 2 };
+  const list = [...users.values()].sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'));
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><h1 style="margin:0">人員管理</h1><span class="spacer"></span><button id="addU">＋ 新增人員</button></div>
+    <p class="muted">人員用這裡登記的 Google 帳號登入即可使用；刪除後立即無法存取。</p>
+    <div class="tablewrap"><table><thead><tr><th>中文名</th><th>英文名</th><th>Google 帳號</th><th>角色</th><th>區域</th><th></th></tr></thead>
+    <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${ROLE[u.role] || esc(u.role)}</td><td>${esc(u.region)}</td>
+      <td class="row-actions"><button class="ghost" data-a="edit">編輯</button>${u.email === me.email ? '' : '<button class="danger" data-a="del">刪除</button>'}</td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">共 ${list.length} 人</p>
+  </div>`;
+  $('#addU').addEventListener('click', () => userForm(null));
+  $('#ubody').addEventListener('click', async e => {
+    const a = e.target.dataset.a; const email = e.target.closest('tr')?.dataset.e;
+    if (!a || !email) return;
+    const u = users.get(email);
+    if (a === 'edit') userForm(u);
+    if (a === 'del') {
+      if (!confirm(`確定刪除 ${salesLabel(email)}（${email}）？刪除後此人立即無法登入。`)) return;
+      try { await deleteDoc(doc(db, 'users', email)); toast('已刪除'); } catch (err) { toast(errMsg(err)); }
+    }
+  });
+}
+
+function userForm(u) {
+  const isNew = !u;
+  const cur = u || { role: 'sales', region: '' };
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form id="uf"><h1>${isNew ? '新增人員' : '編輯人員'}</h1>
+    <div class="grid">
+      <div class="field"><label>Google 帳號（Gmail）*</label><input name="email" type="email" value="${esc(cur.email)}" ${isNew ? '' : 'disabled'}></div>
+      <div class="field"><label>中文名 *</label><input name="nameZh" value="${esc(cur.nameZh)}"></div>
+      <div class="field"><label>英文名</label><input name="nameEn" value="${esc(cur.nameEn)}"></div>
+      <div class="field"><label>角色 *</label><select name="role">${Object.entries(ROLE).map(([k, t]) => `<option value="${k}" ${cur.role === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>區域</label><select name="region"><option value="">（不指定）</option>${REGIONS.map(r => `<option ${cur.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+    </div>
+    ${isNew ? '' : '<p class="muted">要更換 Google 帳號，請刪除後重新新增。</p>'}
+    <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div>
+  </form>`;
+  document.body.appendChild(dlg);
+  const form = dlg.querySelector('#uf');
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#cancel').addEventListener('click', close);
+  dlg.addEventListener('cancel', () => dlg.remove());
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = (isNew ? form.email.value : cur.email).trim().toLowerCase();
+    const nameZh = form.nameZh.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('請輸入正確的 Google 帳號');
+    if (!nameZh) return toast('請填寫中文名');
+    if (isNew && users.has(email)) return toast('這個帳號已經在名單中');
+    if (!isNew && email === me.email && form.role.value !== 'admin' && !confirm('你正在移除自己的管理者權限，確定嗎？')) return;
+    dlg.querySelector('#save').disabled = true;
+    try {
+      await setDoc(doc(db, 'users', email), {
+        email, nameZh, nameEn: form.nameEn.value.trim(), role: form.role.value, region: form.region.value,
+        active: true, updatedBy: me.email, updatedAt: serverTimestamp()
+      }, { merge: true });
+      close(); toast('已儲存');
+    } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
+  });
+  dlg.showModal();
+}
+
+// ---------------- 編號設定（管理者）----------------
+async function viewSettings() {
+  app.innerHTML = '<div class="card"><h1>編號設定</h1><p class="muted">載入中…</p></div>';
+  const vals = {};
+  try {
+    for (const [k] of COUNTERS) { const s = await getDoc(doc(db, 'counters', k)); vals[k] = s.exists() ? s.data().next : 1; }
+  } catch (e) { toast(errMsg(e)); return; }
+  app.innerHTML = `<div class="card"><h1>編號設定</h1>
+    <p class="muted">設定每一類「下一個要使用的號碼」。例：台北潛在客戶最後一筆是 L-A00354，這裡就填 355。</p>
+    <form id="sf"><div class="grid">${COUNTERS.map(([k, t, p]) => `<div class="field"><label>${t}（${p}）下一號</label><input type="number" min="1" name="${k}" value="${vals[k]}"><div class="muted" data-p="${k}">下一筆：${fmt(p, vals[k])}</div></div>`).join('')}</div>
+    <div class="row-actions" style="margin-top:20px"><button type="submit">儲存</button></div></form></div>`;
+  const form = $('#sf');
+  form.addEventListener('input', e => {
+    const k = e.target.name; const p = COUNTERS.find(c => c[0] === k)?.[2];
+    if (p) form.querySelector(`[data-p="${k}"]`).textContent = '下一筆：' + fmt(p, Math.max(1, parseInt(e.target.value) || 1));
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!confirm('確定更新編號？設定錯誤可能產生重複編號。')) return;
+    try {
+      for (const [k] of COUNTERS) await setDoc(doc(db, 'counters', k), { next: Math.max(1, parseInt(form[k].value) || 1) });
+      toast('已儲存');
+    } catch (err) { toast(errMsg(err)); }
+  });
+}
+</script>
+</body>
+</html>
