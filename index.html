@@ -79,11 +79,15 @@ dialog::backdrop{background:rgba(20,24,50,.45)}
 .cal .dc.today .dn{background:var(--navy);color:#fff;border-radius:999px;padding:0 6px}
 .cal .dn{font-size:12px;display:inline-block;margin-bottom:2px}
 .cal.week .dc{min-height:260px}
-.ev{display:block;font-size:12px;padding:2px 6px;margin-bottom:2px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;background:#e5e8f5;color:var(--navy)}
-.ev.engineer{background:#f1e6f4;color:var(--purple)}
-.legend{display:flex;gap:12px;font-size:12px;color:var(--muted);margin-top:8px}
-.legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;background:#e5e8f5;vertical-align:-1px}
-.legend span.engineer::before{background:#f1e6f4}
+.ev{display:block;font-size:12px;padding:2px 6px;margin-bottom:2px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;color:#fff}
+.ev.north{background:#3F51B5}
+.ev.midsouth{background:#2E7D32}
+.ev.leave{background:#D32F2F}
+.ev.holiday{background:#F6C026;color:#3a2e00;cursor:default}
+.ev.none{background:#78849E}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
+.legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .plain::before{display:none}
 .pick{max-height:320px;overflow:auto;margin-top:8px}
 .pick div{padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
 .pick div:hover{background:#f3f4fb}
@@ -486,23 +490,6 @@ const DEMO_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo' };
 
 const PLACES = ['客戶現場', '線上會議', '公司'];
 const REC = {
-  schedules: {
-    title: 'Demo 行程', top: true,
-    canAdd: () => true,
-    canEdit: r => isAdmin() || r.createdBy === me.email,
-    canDel: r => isAdmin() || r.createdBy === me.email,
-    fields: [
-      ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
-      ['date', '日期', 'date', true],
-      ['startTime', '開始時間', 'time', true],
-      ['endTime', '結束時間', 'time'],
-      ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
-      ['engineerEmail', '工程師', 'user', false, ['engineer']],
-      ['place', '地點／方式', 'list', false, PLACES],
-      ['note', '備註', 'textarea', false, null, true]
-    ],
-    cols: [['date', '日期'], ['startTime', '時間', r => r.startTime + (r.endTime ? '～' + r.endTime : '')], ['type', '類型', r => DEMO_TYPE[r.type] || ''], ['salesEmail', '業務', r => salesLabel(r.salesEmail)], ['engineerEmail', '工程師', r => salesLabel(r.engineerEmail)], ['place', '地點／方式'], ['note', '備註', null, true]]
-  },
   demos: {
     title: 'Demo 紀錄', top: true,
     canAdd: () => true,
@@ -511,7 +498,6 @@ const REC = {
     fields: [
       ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
       ['date', '日期', 'date', true],
-      ['scheduleId', '對應行程', 'sched'],
       ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
       ['engineerEmail', '工程師', 'user', false, ['engineer']],
       ['opportunity', '商機', 'list', false, ['中', '暫無需求']],
@@ -541,7 +527,7 @@ const REC = {
     cols: [['date', '安裝日期'], ['software', '安裝軟體'], ['version', '安裝版本'], ['note', '安裝註記', null, true]]
   }
 };
-const REC_ORDER = ['schedules', 'demos', 'purchases', 'issues', 'installs'];
+const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
 const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
 
 function recCol(key, c) { return REC[key].top ? collection(db, key) : collection(db, 'customers', c.id, key); }
@@ -610,12 +596,12 @@ async function callScript(action, payload) {
 // 行程建立後：系統內通知＋Email
 async function notifySchedule(id, data) {
   const to = [...new Set([data.salesEmail, data.engineerEmail].filter(Boolean))];
-  const title = `新 Demo 行程：${data.customerName}`;
-  const body = `${data.date} ${data.startTime}${data.endTime ? '～' + data.endTime : ''}｜${DEMO_TYPE[data.type] || ''}`;
+  if (!to.length) return;
+  const title = `新行程：${data.title}`;
+  const body = `${dateRangeText(data)} ${timeText(data)}｜${SCHED_TYPE[data.type] || ''}`;
   for (const email of to) {
     try { await addDoc(collection(db, 'notifications'), { to: email, from: me.email, title, body, scheduleId: id, date: data.date, read: false, createdAt: serverTimestamp() }); } catch (e) { /* 單筆失敗不影響其他 */ }
   }
-  if (!to.length) return;
   try { await callScript('notify', { scheduleId: id }); } catch (e) { toast('行程已儲存，但 Email 通知失敗：' + errMsg(e)); }
 }
 
@@ -707,17 +693,23 @@ $('#npanel').addEventListener('click', async e => {
 });
 
 // ---------------- 行事曆 ----------------
-const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', sales: '', engineer: '', type: '' };
+const SCHED_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo', class: '上課', leave: '休假', other: '其他' };
+const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '' };
 const schedCache = new Map(); // 'YYYY-MM' -> [schedules]
+const holidayCache = new Map(); // 'YYYY' -> Map(date -> name)
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const ymdOf = d => d.toLocaleDateString('sv-SE');
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
+const endOf = x => x.endDate && x.endDate > x.date ? x.endDate : x.date;
+const dateRangeText = x => endOf(x) !== x.date ? `${x.date}～${endOf(x)}` : x.date;
+const timeText = x => x.startTime ? x.startTime + (x.endTime ? '～' + x.endTime : '') : '全天';
+const evColor = x => x.type === 'leave' ? 'leave' : x.region === '台北' ? 'north' : (x.region === '台中' || x.region === '台南') ? 'midsouth' : 'none';
 
 function afterRecordChange(c) {
-  if (location.hash.startsWith('#/calendar')) viewCalendar();
-  else showRecords(c, true);
   if (c?.id) recCache.delete(c.id);
+  if (location.hash.startsWith('#/calendar')) viewCalendar();
+  else if (c) showRecords(c, true);
 }
 async function loadMonth(ym) {
   if (schedCache.has(ym)) return schedCache.get(ym);
@@ -725,6 +717,17 @@ async function loadMonth(ym) {
   const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   schedCache.set(ym, list);
   return list;
+}
+// 台灣國定假日（資料來源：行政院人事行政總處辦公日曆表，ruyut/TaiwanCalendar 整理）
+async function loadHolidays(year) {
+  if (holidayCache.has(year)) return holidayCache.get(year);
+  const m = new Map();
+  try {
+    const r = await fetch(`https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`);
+    if (r.ok) (await r.json()).forEach(d => { if (d.isHoliday && d.description) m.set(`${d.date.slice(0, 4)}-${d.date.slice(4, 6)}-${d.date.slice(6, 8)}`, d.description); });
+  } catch (e) { /* 抓不到就不顯示假日 */ }
+  holidayCache.set(year, m);
+  return m;
 }
 function calRange() {
   const cur = toDate(cal.cursor);
@@ -736,30 +739,37 @@ function calRange() {
 }
 async function viewCalendar() {
   const [start, end] = calRange();
-  const months = [...new Set([ymdOf(start).slice(0, 7), ymdOf(end).slice(0, 7)])];
-  let all = [];
-  try { for (const m of months) all = all.concat(await loadMonth(m)); } catch (e) { app.innerHTML = `<div class="card"><p>行程載入失敗：${esc(errMsg(e))}</p></div>`; return; }
-  if (!location.hash.startsWith('#/calendar')) return;
   const s0 = ymdOf(start), s1 = ymdOf(end);
-  const list = all.filter(x => x.date >= s0 && x.date <= s1)
+  const months = []; // 多抓前一個月，才看得到跨月的行程
+  for (let d = new Date(start.getFullYear(), start.getMonth() - 1, 1); ymdOf(d).slice(0, 7) <= s1.slice(0, 7); d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) months.push(ymdOf(d).slice(0, 7));
+  let all = []; const hol = new Map();
+  try {
+    for (const m of months) all = all.concat(await loadMonth(m));
+    for (const y of [...new Set([s0.slice(0, 4), s1.slice(0, 4)])]) (await loadHolidays(y)).forEach((v, k) => hol.set(k, v));
+  } catch (e) { app.innerHTML = `<div class="card"><p>行程載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!location.hash.startsWith('#/calendar')) return;
+  const list = all.filter(x => x.date <= s1 && endOf(x) >= s0)
     .filter(x => !cal.region || x.region === cal.region)
-    .filter(x => !cal.sales || x.salesEmail === cal.sales)
-    .filter(x => !cal.engineer || x.engineerEmail === cal.engineer)
+    .filter(x => !cal.person || x.salesEmail === cal.person || x.engineerEmail === cal.person)
     .filter(x => !cal.type || x.type === cal.type)
-    .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+    .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
   const cur = toDate(cal.cursor);
-  const title = cal.view === 'week' ? `${ymdOf(start)} ～ ${ymdOf(end)}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
+  const title = cal.view === 'week' ? `${s0} ～ ${s1}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
   const today = ymdOf(new Date());
-  const chip = x => `<span class="ev ${x.type === 'engineer' ? 'engineer' : ''}" data-sid="${esc(x.id)}" title="${esc(x.customerName)}">${esc(x.startTime)} ${esc(x.customerName)}</span>`;
+  const chip = x => `<span class="ev ${evColor(x)}" data-sid="${esc(x.id)}" title="${esc(x.title)}">${x.startTime ? esc(x.startTime) + ' ' : ''}${esc(x.title)}</span>`;
   let body = '';
   if (cal.view === 'list') {
-    body = list.length ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>客戶</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>地點／方式</th></tr></thead><tbody class="click">${list.map(x => `<tr data-sid="${esc(x.id)}"><td>${esc(x.date)}（${WD[toDate(x.date).getDay()]}）</td><td>${esc(x.startTime)}${x.endTime ? '～' + esc(x.endTime) : ''}</td><td>${esc(x.customerName)}</td><td>${DEMO_TYPE[x.type] || ''}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${esc(x.place)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">這個月沒有行程</p>';
+    const hols = [...hol].filter(([d]) => d >= s0 && d <= s1);
+    body = (list.length || hols.length) ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>標題</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>地點</th></tr></thead><tbody class="click">
+      ${hols.map(([d, n]) => `<tr><td>${d}（${WD[toDate(d).getDay()]}）</td><td>全天</td><td><span class="ev holiday">${esc(n)}</span></td><td>國定假日</td><td></td><td></td><td></td><td></td></tr>`).join('')}
+      ${list.map(x => `<tr data-sid="${esc(x.id)}"><td>${esc(dateRangeText(x))}</td><td>${esc(timeText(x))}</td><td><span class="ev ${evColor(x)}">${esc(x.title)}</span></td><td>${SCHED_TYPE[x.type] || ''}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${esc(x.place)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted">這個月沒有行程</p>';
   } else {
     const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
     body = `<div class="cal ${cal.view === 'week' ? 'week' : ''}">${WD.map(w => `<div class="dh">${w}</div>`).join('')}${days.map(d => {
       const dd = toDate(d); const out = cal.view === 'month' && dd.getMonth() !== cur.getMonth();
-      return `<div class="dc ${out ? 'out' : ''} ${d === today ? 'today' : ''}" data-day="${d}"><span class="dn">${cal.view === 'week' ? (dd.getMonth() + 1) + '/' : ''}${dd.getDate()}</span>${list.filter(x => x.date === d).map(chip).join('')}</div>`;
-    }).join('')}</div><div class="legend"><span>業務 Demo</span><span class="engineer">工程師 Demo</span><span>點空白日期可新增行程</span></div>`;
+      return `<div class="dc ${out ? 'out' : ''} ${d === today ? 'today' : ''}" data-day="${d}"><span class="dn">${cal.view === 'week' ? (dd.getMonth() + 1) + '/' : ''}${dd.getDate()}</span>${hol.has(d) ? `<span class="ev holiday">${esc(hol.get(d))}</span>` : ''}${list.filter(x => x.date <= d && endOf(x) >= d).map(chip).join('')}</div>`;
+    }).join('')}</div>`;
   }
   app.innerHTML = `<div class="card">
     <div class="toolbar"><h1 style="margin:0">行事曆</h1><span class="spacer"></span><button id="addS">＋ 新增行程</button></div>
@@ -769,83 +779,109 @@ async function viewCalendar() {
       <div class="seg" id="vseg">${[['month', '月'], ['week', '週'], ['list', '清單']].map(([k, t]) => `<button data-v="${k}" class="${cal.view === k ? 'on' : ''}">${t}</button>`).join('')}</div>
       <span class="spacer"></span>
       <select id="cRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${cal.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
-      <select id="cSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], cal.sales)}</select>
-      <select id="cEng"><option value="">全部工程師</option>${userOptions(['engineer'], cal.engineer)}</select>
-      <select id="cType"><option value="">全部類型</option>${Object.entries(DEMO_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <select id="cPerson"><option value="">全部人員</option>${userOptions(['sales', 'manager', 'engineer', 'admin'], cal.person)}</select>
+      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <button class="ghost small" id="cRefresh">重新整理</button>
     </div>
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆行程</div>
     ${body}
+    <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span>' : ''}</div>
   </div>`;
   const move = n => { const c0 = toDate(cal.cursor); cal.cursor = ymdOf(cal.view === 'week' ? addDays(c0, 7 * n) : new Date(c0.getFullYear(), c0.getMonth() + n, 1)); viewCalendar(); };
   $('#prev').onclick = () => move(-1); $('#next').onclick = () => move(1);
   $('#today').onclick = () => { cal.cursor = ymdOf(new Date()); viewCalendar(); };
   $('#vseg').onclick = e => { const v = e.target.dataset.v; if (v) { cal.view = v; viewCalendar(); } };
   $('#cRegion').onchange = e => { cal.region = e.target.value; viewCalendar(); };
-  $('#cSales').onchange = e => { cal.sales = e.target.value; viewCalendar(); };
-  $('#cEng').onchange = e => { cal.engineer = e.target.value; viewCalendar(); };
+  $('#cPerson').onchange = e => { cal.person = e.target.value; viewCalendar(); };
   $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
   $('#cRefresh').onclick = () => { schedCache.clear(); viewCalendar(); };
-  $('#addS').onclick = () => pickCustomer(c => recordForm('schedules', c, null, { date: cal.cursor }));
+  $('#addS').onclick = () => scheduleForm(null, { date: cal.cursor });
   app.querySelector('.card').addEventListener('click', e => {
     const sid = e.target.closest('[data-sid]')?.dataset.sid;
     if (sid) { const x = list.find(y => y.id === sid); if (x) scheduleDetail(x); return; }
     const day = e.target.closest('.dc')?.dataset.day;
-    if (day) pickCustomer(c => recordForm('schedules', c, null, { date: day }));
+    if (day) scheduleForm(null, { date: day });
   });
 }
-function stubCustomer(x) {
-  return customers.get(x.customerId) || { id: x.customerId, name: x.customerName, status: 'formal', formalNo: x.customerNo, region: x.region };
-}
+
+const canEditSched = x => isAdmin() || x.createdBy === me.email;
 function scheduleDetail(x) {
-  const R = REC.schedules;
   const dlg = document.createElement('dialog');
   const f = (l, v) => `<div class="field"><label>${l}</label><div class="val">${esc(v) || '<span class="muted">—</span>'}</div></div>`;
-  dlg.innerHTML = `<h1>${esc(x.customerName)}</h1><p class="muted">${esc(x.customerNo)}</p>
-    <div class="grid">${f('日期', `${x.date}（${WD[toDate(x.date).getDay()]}）`)}${f('時間', x.startTime + (x.endTime ? '～' + x.endTime : ''))}${f('類型', DEMO_TYPE[x.type])}${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}${f('地點／方式', x.place)}${f('建立者', salesLabel(x.createdBy))}<div class="field full"><label>備註</label><div class="val" style="white-space:pre-wrap">${esc(x.note) || '<span class="muted">—</span>'}</div></div></div>
+  const wd = d => WD[toDate(d).getDay()];
+  dlg.innerHTML = `<h1><span class="ev ${evColor(x)}" style="display:inline-block;font-size:13px;vertical-align:middle">${SCHED_TYPE[x.type] || ''}</span> ${esc(x.title)}</h1>
+    <p class="muted">${esc(x.date)}（${wd(x.date)}）${endOf(x) !== x.date ? `～${esc(endOf(x))}（${wd(endOf(x))}）` : ''}　${esc(timeText(x))}</p>
+    <div class="grid">${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}${f('地點', x.place)}
+      <div class="field full"><label>網址</label><div class="val">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a>` : '<span class="muted">—</span>'}</div></div>
+      <div class="field full"><label>內容</label><div class="val" style="white-space:pre-wrap">${esc(x.content) || '<span class="muted">—</span>'}</div></div>
+      ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
-      ${customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : ''}
-      ${R.canDel(x) ? '<button class="danger" data-a="del">刪除</button>' : ''}${R.canEdit(x) ? '<button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
+      ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.addEventListener('cancel', () => dlg.remove());
   dlg.addEventListener('click', async e => {
     const a = e.target.dataset.a; if (!a) return;
     if (a === 'close') close();
-    if (a === 'open') { close(); location.hash = '#/customer/' + encodeURIComponent(x.customerId); }
-    if (a === 'edit') { close(); recordForm('schedules', stubCustomer(x), x); }
+    if (a === 'edit') { close(); scheduleForm(x); }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
-      try { await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); recCache.delete(x.customerId); viewCalendar(); } catch (err) { toast(errMsg(err)); }
+      try { await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); viewCalendar(); } catch (err) { toast(errMsg(err)); }
     }
   });
   dlg.showModal();
 }
-function pickCustomer(cb) {
+
+function scheduleForm(r, preset = {}) {
+  const isNew = !r;
+  const defRegion = userRegions(me).length === 1 ? userRegions(me)[0] : '';
+  const cur = r || Object.assign({ type: me.role === 'engineer' ? 'engineer' : 'sales', date: ymdOf(new Date()), region: defRegion,
+    salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : '', engineerEmail: (me.role === 'engineer' || me.alsoEngineer) && me.role !== 'sales' ? me.email : '' }, preset);
   const dlg = document.createElement('dialog');
-  dlg.innerHTML = `<h1>選擇客戶</h1><input id="pq" placeholder="輸入名稱、編號、聯絡人搜尋"><div class="pick" id="plist"></div>
-    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="pc">取消</button></div>`;
+  dlg.innerHTML = `<form id="sf2"><h1>${isNew ? '新增行程' : '編輯行程'}</h1>
+    <div class="grid">
+      <div class="field full"><label>標題 *</label><input name="title" value="${esc(cur.title)}" placeholder="例：彥豪智能-Demo[Andrew,Maggie]"></div>
+      <div class="field"><label>類型</label><select name="type">${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cur.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>區域</label><select name="region"><option value="">（未分區）</option>${REGIONS.map(x => `<option ${cur.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label>開始日期 *</label><input type="date" name="date" value="${esc(cur.date)}"></div>
+      <div class="field"><label>結束日期</label><input type="date" name="endDate" value="${esc(cur.endDate || '')}"><div class="muted">單日行程可留空</div></div>
+      <div class="field"><label>開始時間</label><input type="time" name="startTime" value="${esc(cur.startTime || '')}"><div class="muted">留空＝全天</div></div>
+      <div class="field"><label>結束時間</label><input type="time" name="endTime" value="${esc(cur.endTime || '')}"></div>
+      <div class="field"><label>業務</label><select name="salesEmail"><option value="">（未指定）</option>${userOptions(['sales', 'manager'], cur.salesEmail)}</select></div>
+      <div class="field"><label>工程師</label><select name="engineerEmail"><option value="">（未指定）</option>${userOptions(['engineer'], cur.engineerEmail)}</select></div>
+      <div class="field full"><label>地點</label><input name="place" value="${esc(cur.place || '')}"></div>
+      <div class="field full"><label>網址</label><input name="url" type="url" value="${esc(cur.url || '')}" placeholder="https://"></div>
+      <div class="field full"><label>內容</label><textarea name="content" rows="8" placeholder="客戶名稱、聯絡窗口、電話、備註…">${esc(cur.content || '')}</textarea></div>
+    </div>
+    <p class="muted">${isNew ? '儲存後會以系統通知＋Email 通知所選的業務、工程師。' : ''}</p>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
   document.body.appendChild(dlg);
-  const draw = () => {
-    const q = dlg.querySelector('#pq').value.trim().toLowerCase();
-    const list = [...customers.values()].filter(c => !c.deleted)
-      .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact].some(v => String(v || '').toLowerCase().includes(q)))
-      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant')).slice(0, 50);
-    dlg.querySelector('#plist').innerHTML = list.map(c => `<div data-id="${esc(c.id)}"><strong>${esc(custNo(c))}</strong>　${esc(c.name)} <span class="muted">${esc(c.region)}</span></div>`).join('') || '<p class="muted">找不到客戶</p>';
-  };
-  draw();
-  dlg.querySelector('#pq').addEventListener('input', draw);
-  dlg.querySelector('#pc').onclick = () => { dlg.close(); dlg.remove(); };
+  const form = dlg.querySelector('#sf2');
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#cancel').onclick = close;
   dlg.addEventListener('cancel', () => dlg.remove());
-  dlg.querySelector('#plist').addEventListener('click', async e => {
-    const id = e.target.closest('[data-id]')?.dataset.id; if (!id) return;
-    dlg.close(); dlg.remove();
-    const c = customers.get(id);
-    if (!recCache.has(c.id)) { try { await loadRecords(c); } catch (err) { /* 對應行程選單會是空的 */ } }
-    cb(c);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const v = k => String(form[k].value || '').trim();
+    const data = { title: v('title'), type: v('type'), region: v('region'), date: v('date'), endDate: v('endDate'), startTime: v('startTime'), endTime: v('endTime'),
+      salesEmail: v('salesEmail'), engineerEmail: v('engineerEmail'), place: v('place'), url: v('url'), content: v('content') };
+    if (!data.title) return toast('請填寫標題');
+    if (!data.date) return toast('請選擇開始日期');
+    if (data.endDate && data.endDate < data.date) return toast('結束日期不能早於開始日期');
+    if (data.endDate === data.date) data.endDate = '';
+    if (!data.endDate && data.startTime && data.endTime && data.endTime < data.startTime) return toast('結束時間不能早於開始時間');
+    if (data.url && !/^https?:\/\//i.test(data.url)) data.url = 'https://' + data.url;
+    dlg.querySelector('#save').disabled = true;
+    try {
+      let id = r?.id;
+      if (isNew) id = (await addDoc(collection(db, 'schedules'), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
+      else await updateDoc(doc(db, 'schedules', r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+      close(); toast('已儲存'); schedCache.clear();
+      if (location.hash.startsWith('#/calendar')) viewCalendar();
+      if (isNew) notifySchedule(id, data);
+    } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
   dlg.showModal();
-  dlg.querySelector('#pq').focus();
 }
 
 // ---------------- 人員管理（管理者）----------------
