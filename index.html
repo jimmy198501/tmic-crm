@@ -64,6 +64,8 @@ tbody.click tr:hover{background:#f3f4fb}
 dialog{border:0;border-radius:12px;padding:24px;max-width:760px;width:calc(100% - 32px)}
 dialog::backdrop{background:rgba(20,24,50,.45)}
 .hidden{display:none!important}
+.card.warn{background:#FFF6E0;border-color:#F2C46B;color:#5a4300}
+tr.left td{color:#9aa}
 .bellwrap{position:relative}
 .bell{padding:6px 10px;position:relative}
 .badge{position:absolute;top:-6px;right:-6px;background:var(--purple);color:#fff;border-radius:999px;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px}
@@ -159,8 +161,10 @@ const isAdmin = () => me?.role === 'admin';
 const userRegions = u => Array.isArray(u?.regions) ? u.regions : (u?.region ? [u.region] : []);
 const fmt = (prefix, n) => prefix + String(n).padStart(5, '0');
 const custNo = c => (c.status === 'formal' ? c.formalNo : c.leadNo) || '';
-const salesLabel = email => { const u = users.get(email); return u ? `${u.nameZh || ''}${u.nameEn ? ' ' + u.nameEn : ''}` : (email || ''); };
-const salesOptions = sel => [...users.values()].filter(u => u.role === 'sales' || u.role === 'manager')
+const isLeft = email => users.get(email)?.active === false;
+const salesLabel = email => { const u = users.get(email); return u ? `${u.nameZh || ''}${u.nameEn ? ' ' + u.nameEn : ''}${u.active === false ? '（離職）' : ''}` : (email || ''); };
+const leftCustomers = () => [...customers.values()].filter(c => !c.deleted && c.salesEmail && isLeft(c.salesEmail));
+const salesOptions = sel => [...users.values()].filter(u => (u.role === 'sales' || u.role === 'manager') && (u.active !== false || u.email === sel))
   .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
   .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
 
@@ -209,7 +213,7 @@ onAuthStateChanged(auth, async u => {
   unsubUsers = onSnapshot(collection(db, 'users'), s => {
     users.clear();
     s.forEach(d => users.set(d.id, { ...d.data(), email: d.id }));
-    if (me && !users.has(me.email)) { signOut(auth); return; }
+    if (me && (!users.has(me.email) || users.get(me.email).active === false)) { signOut(auth); return; }
     if (!document.querySelector('dialog[open]')) route();
   });
 
@@ -293,11 +297,12 @@ const COLS = [
   ['contact', '聯絡人', c => c.contact], ['phone', '電話', c => c.phone], ['maint', '維護日期', c => c.maintenanceDate]
 ];
 function viewCustomers() {
-  app.innerHTML = `<div class="card"><h1>客戶</h1>
+  const leftN = isAdmin() ? leftCustomers().length : 0;
+  app.innerHTML = `${leftN ? `<div class="card warn"><strong>⚠ 有 ${leftN} 位客戶的負責業務已離職</strong>，請調整負責業務。<button class="small" id="showLeft" style="margin-left:8px">查看名單</button></div>` : ''}<div class="card"><h1>客戶</h1>
     <div class="toolbar">
       <div class="seg" id="seg">${[['all', '全部'], ['potential', '潛在'], ['formal', '正式']].map(([k, t]) => `<button data-k="${k}" class="${ui.status === k ? 'on' : ''}">${t}</button>`).join('')}</div>
       <select id="fRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${ui.region === r ? 'selected' : ''}>${r}</option>`).join('')}<option value="__none" ${ui.region === '__none' ? 'selected' : ''}>未分區</option></select>
-      ${me.role !== 'sales' ? `<select id="fSales"><option value="">全部業務</option>${salesOptions(ui.sales)}</select>` : ''}
+      ${me.role !== 'sales' ? `<select id="fSales"><option value="">全部業務</option>${salesOptions(ui.sales)}${isAdmin() ? `<option value="__left" ${ui.sales === '__left' ? 'selected' : ''}>⚠ 負責業務已離職</option>` : ''}</select>` : ''}
       <input id="fQ" placeholder="搜尋名稱、編號、聯絡人、電話" value="${esc(ui.q)}">
       <span class="spacer"></span>
       <button class="ghost" id="refresh">重新整理</button>
@@ -306,6 +311,7 @@ function viewCustomers() {
     <div class="muted" id="count"></div>
     <div class="tablewrap"><table><thead><tr id="thead"></tr></thead><tbody id="tbody" class="click"></tbody></table></div>
   </div>`;
+  $('#showLeft')?.addEventListener('click', () => { ui.sales = '__left'; ui.status = 'all'; viewCustomers(); });
   $('#seg').addEventListener('click', e => { const k = e.target.dataset.k; if (!k) return; ui.status = k; viewCustomers(); });
   $('#fRegion').addEventListener('change', e => { ui.region = e.target.value; renderTable(); });
   $('#fSales')?.addEventListener('change', e => { ui.sales = e.target.value; renderTable(); });
@@ -327,7 +333,7 @@ function renderTable() {
   const list = [...customers.values()].filter(c => !c.deleted)
     .filter(c => ui.status === 'all' || c.status === ui.status)
     .filter(c => !ui.region || (ui.region === '__none' ? !c.region : c.region === ui.region))
-    .filter(c => !ui.sales || c.salesEmail === ui.sales)
+    .filter(c => !ui.sales || (ui.sales === '__left' ? (c.salesEmail && isLeft(c.salesEmail)) : c.salesEmail === ui.sales))
     .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact, c.phone, c.mobile].some(v => String(v || '').toLowerCase().includes(q)));
   const col = COLS.find(c => c[0] === ui.sort) || COLS[0];
   list.sort((a, b) => String(col[2](a) || '').localeCompare(String(col[2](b) || ''), 'zh-Hant', { numeric: true }) * ui.dir);
@@ -485,20 +491,23 @@ async function deleteCustomer(c) {
 
 // ---------------- 關聯紀錄（採購、問題追蹤、安裝、Demo）----------------
 const isEngineer = () => me?.role === 'engineer';
-const userOptions = (roles, sel) => [...users.values()].filter(u => roles.includes(u.role) || (roles.includes('engineer') && u.alsoEngineer))
+const userOptions = (roles, sel) => [...users.values()].filter(u => (roles.includes(u.role) || (roles.includes('engineer') && u.alsoEngineer)) && (u.active !== false || u.email === sel))
   .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
   .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
 const DEMO_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo' };
+// 業務（含業務主管）只能填業務 Demo；工程師只能填工程師 Demo；管理者兩種都可
+const demoTypes = () => isAdmin() ? ['sales', 'engineer']
+  : [...((me.role === 'sales' || me.role === 'manager') ? ['sales'] : []), ...((me.role === 'engineer' || me.alsoEngineer) ? ['engineer'] : [])];
 
 const PLACES = ['客戶現場', '線上會議', '公司'];
 const REC = {
   demos: {
     title: 'Demo 紀錄', top: true,
-    canAdd: () => true,
+    canAdd: () => demoTypes().length > 0,
     canEdit: r => isAdmin() || r.createdBy === me.email,
     canDel: r => isAdmin() || r.createdBy === me.email,
     fields: [
-      ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
+      ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).filter(([k]) => demoTypes().includes(k))],
       ['date', '日期', 'date', true],
       ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
       ['engineerEmail', '工程師', 'user', false, ['engineer']],
@@ -615,9 +624,13 @@ function recordForm(k, c, r, preset = {}) {
   const isNew = !r;
   const cur = r || Object.assign(['demos', 'schedules'].includes(k) ? { type: me.role === 'engineer' ? 'engineer' : 'sales', date: new Date().toLocaleDateString('sv-SE'), salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : (c.salesEmail || ''), engineerEmail: me.role === 'engineer' ? me.email : '' } : { date: new Date().toLocaleDateString('sv-SE') }, preset);
   let files = [...(cur.files || [])];
+  const lock = k === 'demos' && !isAdmin() && demoTypes().length === 1 ? demoTypes()[0] : null;
+  if (lock) { cur.type = lock; if (lock === 'sales') cur.salesEmail = me.email; else cur.engineerEmail = me.email; }
   const field = ([f, t, type, req, opt, full]) => {
     const lab = `<label>${t}${req ? ' *' : ''}</label>`;
     const cls = `field${full ? ' full' : ''}`;
+    if (lock && f === 'type') return `<div class="${cls}">${lab}<input type="hidden" name="type" value="${lock}"><div class="val">${DEMO_TYPE[lock]}</div></div>`;
+    if (lock && ((lock === 'sales' && f === 'salesEmail') || (lock === 'engineer' && f === 'engineerEmail'))) return `<div class="${cls}">${lab}<input type="hidden" name="${f}" value="${esc(me.email)}"><div class="val">${esc(salesLabel(me.email))}</div></div>`;
     if (type === 'textarea') return `<div class="${cls}">${lab}<textarea name="${f}" rows="4">${esc(cur[f])}</textarea></div>`;
     if (type === 'date') return `<div class="${cls}">${lab}<input type="date" name="${f}" value="${esc(cur[f])}"></div>`;
     if (type === 'time') return `<div class="${cls}">${lab}<input type="time" name="${f}" value="${esc(cur[f])}"></div>`;
@@ -661,6 +674,8 @@ function recordForm(k, c, r, preset = {}) {
       }
       if (R.fields.some(x => x[2] === 'files')) data.files = files;
       if (R.top) Object.assign(data, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c), region: c.region || '' });
+      if (k === 'demos' && cur.scheduleId) data.scheduleId = cur.scheduleId;
+      if (k === 'demos' && !isAdmin() && !demoTypes().includes(data.type)) throw new Error('你不能填寫這種 Demo 紀錄');
       if (k === 'schedules' && data.endTime && data.endTime < data.startTime) throw new Error('結束時間不能早於開始時間');
       let newId = null;
       if (isNew) newId = (await addDoc(recCol(k, c), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
@@ -824,6 +839,7 @@ function scheduleDetail(x) {
       ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
       ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
+      ${demoTypes().map(t => `<button class="accent" data-a="demo" data-t="${t}">轉為${DEMO_TYPE[t]}紀錄</button>`).join('')}
       ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
@@ -833,6 +849,12 @@ function scheduleDetail(x) {
     if (a === 'close') close();
     if (a === 'edit') { close(); scheduleForm(x); }
     if (a === 'open') { close(); location.hash = '#/customer/' + encodeURIComponent(x.customerId); }
+    if (a === 'demo') {
+      close();
+      const preset = { type: e.target.dataset.t, date: x.date, salesEmail: x.salesEmail || '', engineerEmail: x.engineerEmail || '', scheduleId: x.id };
+      const go = c => recordForm('demos', c, null, preset);
+      if (x.customerId && customers.has(x.customerId)) go(customers.get(x.customerId)); else pickCustomer(go);
+    }
     if (a === 'conv') {
       close();
       customerForm(null, scheduleToCustomer(x), async id => {
@@ -988,7 +1010,7 @@ async function viewRecords() {
   const [y, m] = recsUI.ym.split('-').map(Number);
   const isDemo = col === 'demos';
   app.innerHTML = `<div class="card">
-    <div class="toolbar"><h1 style="margin:0">紀錄</h1><span class="spacer"></span>${R.canAdd() ? '<button id="addR">＋ 新增' + tabTitle + '</button>' : ''}</div>
+    <div class="toolbar"><h1 style="margin:0">紀錄</h1><span class="spacer"></span>${(isDemo ? demoTypes().includes(demoType) : R.canAdd()) ? '<button id="addR">＋ 新增' + tabTitle + '</button>' : ''}</div>
     <div class="toolbar"><div class="seg" id="rtabs">${tabs.map(([k, t]) => `<button data-t="${k}" class="${recsUI.tab === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
     <div class="toolbar">
       <button class="ghost small" id="rprev">‹</button><button class="ghost small" id="rnow">本月</button><button class="ghost small" id="rnext">›</button>
@@ -1062,9 +1084,10 @@ function viewUsers() {
   const list = [...users.values()].sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'));
   app.innerHTML = `<div class="card">
     <div class="toolbar"><h1 style="margin:0">人員管理</h1><span class="spacer"></span><button id="addU">＋ 新增人員</button></div>
-    <p class="muted">人員用這裡登記的 Google 帳號登入即可使用；刪除後立即無法存取。</p>
-    <div class="tablewrap"><table><thead><tr><th>中文名</th><th>英文名</th><th>Google 帳號</th><th>角色</th><th>區域</th><th></th></tr></thead>
-    <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${ROLE[u.role] || esc(u.role)}${u.alsoEngineer && u.role !== 'engineer' ? '＋工程師' : ''}</td><td>${esc(userRegions(u).join('、'))}</td>
+    <p class="muted">人員用這裡登記的 Google 帳號登入即可使用。人員離職請用「編輯 → 狀態：離職」，會保留姓名並立即停止登入。</p>
+    <div class="tablewrap"><table><thead><tr><th>中文名</th><th>英文名</th><th>Google 帳號</th><th>角色</th><th>區域</th><th>狀態</th><th></th></tr></thead>
+    <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}" class="${u.active === false ? 'left' : ''}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${ROLE[u.role] || esc(u.role)}${u.alsoEngineer && u.role !== 'engineer' ? '＋工程師' : ''}</td><td>${esc(userRegions(u).join('、'))}</td>
+      <td>${u.active === false ? (() => { const n = leftCustomers().filter(c => c.salesEmail === u.email).length; return '離職' + (n ? `　<a href="#" data-a="cust">${n} 位客戶待調整</a>` : ''); })() : '在職'}</td>
       <td class="row-actions"><button class="ghost" data-a="edit">編輯</button>${u.email === me.email ? '' : '<button class="danger" data-a="del">刪除</button>'}</td></tr>`).join('')}</tbody></table></div>
     <p class="muted">共 ${list.length} 人</p>
   </div>`;
@@ -1074,7 +1097,10 @@ function viewUsers() {
     if (!a || !email) return;
     const u = users.get(email);
     if (a === 'edit') userForm(u);
+    if (a === 'cust') { e.preventDefault(); ui.sales = '__left'; ui.status = 'all'; location.hash = '#/customers'; return; }
     if (a === 'del') {
+      const n = [...customers.values()].filter(c => !c.deleted && c.salesEmail === email).length;
+      if (n && !confirm(`${salesLabel(email)} 目前仍負責 ${n} 位客戶，刪除後這些客戶的負責業務會變成無法辨識。\n\n建議改用「編輯 → 狀態：離職」保留此人。\n\n仍要刪除嗎？`)) return;
       if (!confirm(`確定刪除 ${salesLabel(email)}（${email}）？刪除後此人立即無法登入。`)) return;
       try { await deleteDoc(doc(db, 'users', email)); toast('已刪除'); } catch (err) { toast(errMsg(err)); }
     }
@@ -1093,6 +1119,7 @@ function userForm(u) {
       <div class="field"><label>英文名</label><input name="nameEn" value="${esc(cur.nameEn)}"></div>
       <div class="field"><label>角色 *</label><select name="role">${Object.entries(ROLE).map(([k, t]) => `<option value="${k}" ${cur.role === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div class="field"><label>負責區域（可多選）</label><div class="checks">${REGIONS.map(r => `<label><input type="checkbox" name="reg" value="${r}" ${curRegs.includes(r) ? 'checked' : ''}>${r}</label>`).join('')}</div><div class="muted">業務主管可看到所勾區域的全部客戶</div></div>
+      <div class="field"><label>狀態</label><select name="active"><option value="1" ${cur.active !== false ? 'selected' : ''}>在職</option><option value="0" ${cur.active === false ? 'selected' : ''}>離職（停止登入、保留資料）</option></select></div>
       <div class="field"><label>其他</label><div class="checks"><label><input type="checkbox" name="alsoEngineer" ${cur.alsoEngineer ? 'checked' : ''}>兼任工程師</label></div><div class="muted">勾選後會出現在 Demo 的工程師選單</div></div>
     </div>
     ${isNew ? '' : '<p class="muted">要更換 Google 帳號，請刪除後重新新增。</p>'}
@@ -1111,14 +1138,18 @@ function userForm(u) {
     if (!nameZh) return toast('請填寫中文名');
     if (form.role.value === 'manager' && !form.querySelector('input[name=reg]:checked')) return toast('業務主管至少要勾選一個負責區域');
     if (isNew && users.has(email)) return toast('這個帳號已經在名單中');
+    if (email === me.email && form.active.value === '0') return toast('不能把自己設為離職');
     if (!isNew && email === me.email && form.role.value !== 'admin' && !confirm('你正在移除自己的管理者權限，確定嗎？')) return;
     dlg.querySelector('#save').disabled = true;
     try {
       await setDoc(doc(db, 'users', email), {
         email, nameZh, nameEn: form.nameEn.value.trim(), role: form.role.value, regions: [...form.querySelectorAll('input[name=reg]:checked')].map(i => i.value), region: '', alsoEngineer: form.alsoEngineer.checked,
-        active: true, updatedBy: me.email, updatedAt: serverTimestamp()
+        active: form.active.value === '1', updatedBy: me.email, updatedAt: serverTimestamp()
       }, { merge: true });
-      close(); toast('已儲存');
+      close();
+      const n = form.active.value === '0' ? [...customers.values()].filter(c => !c.deleted && c.salesEmail === email).length : 0;
+      if (n) { alert(`${nameZh} 已設為離職。\n\n他目前負責 ${n} 位客戶，請到「客戶」頁點「查看名單」調整負責業務。`); }
+      else toast('已儲存');
     } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
   dlg.showModal();
