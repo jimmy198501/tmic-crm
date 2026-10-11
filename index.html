@@ -164,9 +164,9 @@ const salesOptions = sel => [...users.values()].filter(u => u.role === 'sales' |
   .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
   .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
 
-function toast(msg) {
+function toast(msg, ms = 3000) {
   const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
-  clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = 'none'), 3000);
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = 'none'), ms);
 }
 function errMsg(e) {
   if (e?.code === 'permission-denied') return '權限不足，無法執行';
@@ -602,7 +602,10 @@ async function notifySchedule(id, data) {
   for (const email of to) {
     try { await addDoc(collection(db, 'notifications'), { to: email, from: me.email, title, body, scheduleId: id, date: data.date, read: false, createdAt: serverTimestamp() }); } catch (e) { /* 單筆失敗不影響其他 */ }
   }
-  try { await callScript('notify', { scheduleId: id }); } catch (e) { toast('行程已儲存，但 Email 通知失敗：' + errMsg(e)); }
+  try {
+    const j = await callScript('notify', { scheduleId: id });
+    toast(j.sent ? `已寄出 Email 給 ${j.sent} 人` : 'Email 未寄出：Apps Script 回傳 0 位收件人（可能尚未更新為新版程式）', 10000);
+  } catch (e) { toast('行程已儲存，但 Email 通知失敗：' + errMsg(e), 10000); }
 }
 
 function recordForm(k, c, r, preset = {}) {
