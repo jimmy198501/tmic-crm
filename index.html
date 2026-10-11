@@ -64,6 +64,30 @@ tbody.click tr:hover{background:#f3f4fb}
 dialog{border:0;border-radius:12px;padding:24px;max-width:760px;width:calc(100% - 32px)}
 dialog::backdrop{background:rgba(20,24,50,.45)}
 .hidden{display:none!important}
+.bellwrap{position:relative}
+.bell{padding:6px 10px;position:relative}
+.badge{position:absolute;top:-6px;right:-6px;background:var(--purple);color:#fff;border-radius:999px;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px}
+.panel{position:absolute;right:0;top:44px;width:340px;max-height:420px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(20,24,50,.15);z-index:30;text-align:left;color:var(--ink)}
+.panel .ph{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-weight:500}
+.panel .ni{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:14px}
+.panel .ni:hover{background:#f3f4fb}
+.panel .ni .t{font-weight:500}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.cal .dh{padding:6px;text-align:center;font-size:13px;color:var(--muted);background:#fafbfd;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.cal .dc{min-height:104px;padding:4px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);cursor:pointer;overflow:hidden}
+.cal .dc.out{background:#fafbfd;color:#aab}
+.cal .dc.today .dn{background:var(--navy);color:#fff;border-radius:999px;padding:0 6px}
+.cal .dn{font-size:12px;display:inline-block;margin-bottom:2px}
+.cal.week .dc{min-height:260px}
+.ev{display:block;font-size:12px;padding:2px 6px;margin-bottom:2px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;background:#e5e8f5;color:var(--navy)}
+.ev.engineer{background:#f1e6f4;color:var(--purple)}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;background:#e5e8f5;vertical-align:-1px}
+.legend span.engineer::before{background:#f1e6f4}
+.pick{max-height:320px;overflow:auto;margin-top:8px}
+.pick div{padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+.pick div:hover{background:#f3f4fb}
+@media (max-width:640px){.cal .dc{min-height:64px}.ev{font-size:10px;padding:1px 3px}.panel{width:290px;right:-60px}}
 td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 .files a{display:block;font-size:13px}
 .filelist{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
@@ -80,7 +104,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 <header id="hdr" class="hidden">
   <div class="brand">tmic<span class="dot">.</span><small>CRM</small></div>
   <nav id="nav"></nav>
-  <div class="me"><span id="meName"></span><button class="ghost" id="logout">登出</button></div>
+  <div class="me"><div class="bellwrap"><button class="ghost bell" id="bell" title="通知">🔔<span class="badge hidden" id="badge"></span></button><div class="panel hidden" id="npanel"></div></div><span id="meName"></span><button class="ghost" id="logout">登出</button></div>
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
@@ -119,6 +143,8 @@ const users = new Map();
 const customers = new Map();
 let lastSync = 0;
 let unsubUsers = null;
+let unsubNotes = null;
+let notes = [];
 let timer = null;
 const ui = { status: 'all', region: '', sales: '', q: '', sort: 'no', dir: 1 };
 
@@ -160,6 +186,8 @@ $('#logout').addEventListener('click', () => signOut(auth));
 onAuthStateChanged(auth, async u => {
   me = null; customers.clear(); users.clear();
   if (unsubUsers) { unsubUsers(); unsubUsers = null; }
+  if (unsubNotes) { unsubNotes(); unsubNotes = null; }
+  notes = []; renderBell();
   if (timer) { clearInterval(timer); timer = null; }
   if (!u) { viewLogin(); return; }
   const email = (u.email || '').toLowerCase();
@@ -180,6 +208,11 @@ onAuthStateChanged(auth, async u => {
     if (me && !users.has(me.email)) { signOut(auth); return; }
     if (!document.querySelector('dialog[open]')) route();
   });
+
+  unsubNotes = onSnapshot(query(collection(db, 'notifications'), where('to', '==', me.email), where('read', '==', false)), s => {
+    notes = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    renderBell();
+  }, () => {});
 
   try { await syncCustomers(); } catch (e) { toast(errMsg(e)); }
   route();
@@ -229,7 +262,7 @@ async function softRefresh() {
 // ---------------- 路由 ----------------
 function renderNav() {
   const h = location.hash || '#/customers';
-  const items = [['#/customers', '客戶']];
+  const items = [['#/customers', '客戶'], ['#/calendar', '行事曆']];
   if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
@@ -241,6 +274,7 @@ function route() {
   renderNav();
   const [, page, id] = (location.hash || '#/customers').split('/');
   if (page === 'customer' && id) viewCustomer(decodeURIComponent(id));
+  else if (page === 'calendar') viewCalendar();
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else viewCustomers();
@@ -450,7 +484,25 @@ const userOptions = (roles, sel) => [...users.values()].filter(u => roles.includ
   .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
 const DEMO_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo' };
 
+const PLACES = ['客戶現場', '線上會議', '公司'];
 const REC = {
+  schedules: {
+    title: 'Demo 行程', top: true,
+    canAdd: () => true,
+    canEdit: r => isAdmin() || r.createdBy === me.email,
+    canDel: r => isAdmin() || r.createdBy === me.email,
+    fields: [
+      ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
+      ['date', '日期', 'date', true],
+      ['startTime', '開始時間', 'time', true],
+      ['endTime', '結束時間', 'time'],
+      ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
+      ['engineerEmail', '工程師', 'user', false, ['engineer']],
+      ['place', '地點／方式', 'list', false, PLACES],
+      ['note', '備註', 'textarea', false, null, true]
+    ],
+    cols: [['date', '日期'], ['startTime', '時間', r => r.startTime + (r.endTime ? '～' + r.endTime : '')], ['type', '類型', r => DEMO_TYPE[r.type] || ''], ['salesEmail', '業務', r => salesLabel(r.salesEmail)], ['engineerEmail', '工程師', r => salesLabel(r.engineerEmail)], ['place', '地點／方式'], ['note', '備註', null, true]]
+  },
   demos: {
     title: 'Demo 紀錄', top: true,
     canAdd: () => true,
@@ -459,6 +511,7 @@ const REC = {
     fields: [
       ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
       ['date', '日期', 'date', true],
+      ['scheduleId', '對應行程', 'sched'],
       ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
       ['engineerEmail', '工程師', 'user', false, ['engineer']],
       ['opportunity', '商機', 'list', false, ['中', '暫無需求']],
@@ -488,14 +541,16 @@ const REC = {
     cols: [['date', '安裝日期'], ['software', '安裝軟體'], ['version', '安裝版本'], ['note', '安裝註記', null, true]]
   }
 };
-const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
+const REC_ORDER = ['schedules', 'demos', 'purchases', 'issues', 'installs'];
 const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
 
 function recCol(key, c) { return REC[key].top ? collection(db, key) : collection(db, 'customers', c.id, key); }
 async function loadRecords(c) {
   const out = {};
-  out.demos = (await getDocs(query(collection(db, 'demos'), where('customerId', '==', c.id)))).docs.map(d => ({ id: d.id, ...d.data() }));
-  for (const k of ['purchases', 'issues', 'installs']) out[k] = (await getDocs(recCol(k, c))).docs.map(d => ({ id: d.id, ...d.data() }));
+  for (const k of REC_ORDER) {
+    const q = REC[k].top ? query(collection(db, k), where('customerId', '==', c.id)) : recCol(k, c);
+    out[k] = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
+  }
   recCache.set(c.id, out);
   return out;
 }
@@ -532,7 +587,7 @@ async function showRecords(c, reload = false) {
     if (act === 'edit' && r) recordForm(k, c, r);
     if (act === 'del' && r) {
       if (!confirm(`確定刪除這筆${REC[k].title}？`)) return;
-      try { await deleteDoc(doc(recCol(k, c), r.id)); toast('已刪除'); showRecords(c, true); } catch (err) { toast(errMsg(err)); }
+      try { await deleteDoc(doc(recCol(k, c), r.id)); toast('已刪除'); if (k === 'schedules') schedCache.clear(); afterRecordChange(c); } catch (err) { toast(errMsg(err)); }
     }
   }));
 }
@@ -541,23 +596,44 @@ async function uploadFile(file, kind, customerNo) {
   if (!UPLOAD_URL) throw new Error('尚未設定檔案上傳網址（UPLOAD_URL）');
   if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} 超過 10MB`);
   const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(file); });
-  const idToken = await auth.currentUser.getIdToken();
-  const resp = await fetch(UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'upload', idToken, kind, customerNo, name: file.name, mimeType: file.type, data }) });
-  const j = await resp.json();
-  if (!j.ok) throw new Error(j.error || '上傳失敗');
+  const j = await callScript('upload', { kind, customerNo, name: file.name, mimeType: file.type, data });
   return { name: j.name, url: j.url };
 }
+async function callScript(action, payload) {
+  if (!UPLOAD_URL) throw new Error('尚未設定 Apps Script 網址');
+  const idToken = await auth.currentUser.getIdToken();
+  const resp = await fetch(UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, idToken, ...payload }) });
+  const j = await resp.json();
+  if (!j.ok) throw new Error(j.error || '執行失敗');
+  return j;
+}
+// 行程建立後：系統內通知＋Email
+async function notifySchedule(id, data) {
+  const to = [...new Set([data.salesEmail, data.engineerEmail].filter(Boolean))];
+  const title = `新 Demo 行程：${data.customerName}`;
+  const body = `${data.date} ${data.startTime}${data.endTime ? '～' + data.endTime : ''}｜${DEMO_TYPE[data.type] || ''}`;
+  for (const email of to) {
+    try { await addDoc(collection(db, 'notifications'), { to: email, from: me.email, title, body, scheduleId: id, date: data.date, read: false, createdAt: serverTimestamp() }); } catch (e) { /* 單筆失敗不影響其他 */ }
+  }
+  if (!to.length) return;
+  try { await callScript('notify', { scheduleId: id }); } catch (e) { toast('行程已儲存，但 Email 通知失敗：' + errMsg(e)); }
+}
 
-function recordForm(k, c, r) {
+function recordForm(k, c, r, preset = {}) {
   const R = REC[k];
   const isNew = !r;
-  const cur = r || (k === 'demos' ? { type: me.role === 'engineer' ? 'engineer' : 'sales', date: new Date().toLocaleDateString('sv-SE'), salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : (c.salesEmail || ''), engineerEmail: me.role === 'engineer' ? me.email : '' } : { date: new Date().toLocaleDateString('sv-SE') });
+  const cur = r || Object.assign(['demos', 'schedules'].includes(k) ? { type: me.role === 'engineer' ? 'engineer' : 'sales', date: new Date().toLocaleDateString('sv-SE'), salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : (c.salesEmail || ''), engineerEmail: me.role === 'engineer' ? me.email : '' } : { date: new Date().toLocaleDateString('sv-SE') }, preset);
   let files = [...(cur.files || [])];
   const field = ([f, t, type, req, opt, full]) => {
     const lab = `<label>${t}${req ? ' *' : ''}</label>`;
     const cls = `field${full ? ' full' : ''}`;
     if (type === 'textarea') return `<div class="${cls}">${lab}<textarea name="${f}" rows="4">${esc(cur[f])}</textarea></div>`;
     if (type === 'date') return `<div class="${cls}">${lab}<input type="date" name="${f}" value="${esc(cur[f])}"></div>`;
+    if (type === 'time') return `<div class="${cls}">${lab}<input type="time" name="${f}" value="${esc(cur[f])}"></div>`;
+    if (type === 'sched') {
+      const list = [...((recCache.get(c.id) || {}).schedules || [])].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      return `<div class="${cls}">${lab}<select name="${f}"><option value="">（不指定）</option>${list.map(x => `<option value="${esc(x.id)}" ${cur[f] === x.id ? 'selected' : ''}>${esc(x.date)} ${esc(x.startTime)} ${esc(DEMO_TYPE[x.type] || '')}</option>`).join('')}</select></div>`;
+    }
     if (type === 'select') return `<div class="${cls}">${lab}<select name="${f}">${opt().map(([v, tt]) => `<option value="${v}" ${cur[f] === v ? 'selected' : ''}>${tt}</option>`).join('')}</select></div>`;
     if (type === 'user') return `<div class="${cls}">${lab}<select name="${f}"><option value="">（未指定）</option>${userOptions(opt, cur[f])}</select></div>`;
     if (type === 'list') return `<div class="${cls}">${lab}<input name="${f}" list="dl_${f}" value="${esc(cur[f])}"><datalist id="dl_${f}">${opt.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>`;
@@ -593,13 +669,183 @@ function recordForm(k, c, r) {
         for (const f of picker.files) files.push(await uploadFile(f, R.kind, custNo(c) || c.leadNo || c.id));
       }
       if (R.fields.some(x => x[2] === 'files')) data.files = files;
-      if (k === 'demos') Object.assign(data, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c) });
-      if (isNew) await addDoc(recCol(k, c), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() });
+      if (R.top) Object.assign(data, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c), region: c.region || '' });
+      if (k === 'schedules' && data.endTime && data.endTime < data.startTime) throw new Error('結束時間不能早於開始時間');
+      let newId = null;
+      if (isNew) newId = (await addDoc(recCol(k, c), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
       else await updateDoc(doc(recCol(k, c), r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-      close(); toast('已儲存'); showRecords(c, true);
+      close(); toast('已儲存');
+      if (k === 'schedules') { schedCache.clear(); if (isNew) notifySchedule(newId, data); }
+      afterRecordChange(c);
     } catch (err) { toast(errMsg(err)); saveBtn.disabled = false; saveBtn.textContent = '儲存'; }
   });
   dlg.showModal();
+}
+
+// ---------------- 通知鈴鐺 ----------------
+function renderBell() {
+  const b = $('#badge'); if (!b) return;
+  b.textContent = notes.length > 99 ? '99+' : notes.length;
+  b.classList.toggle('hidden', !notes.length);
+  const p = $('#npanel');
+  if (!p.classList.contains('hidden')) drawPanel();
+}
+function drawPanel() {
+  $('#npanel').innerHTML = `<div class="ph"><span>通知</span>${notes.length ? '<button class="ghost small" id="readAll">全部標為已讀</button>' : ''}</div>` +
+    (notes.map(n => `<div class="ni" data-id="${esc(n.id)}"><div class="t">${esc(n.title)}</div><div class="muted">${esc(n.body)}</div></div>`).join('') || '<div class="ni muted">沒有新通知</div>');
+}
+$('#bell').addEventListener('click', e => { e.stopPropagation(); const p = $('#npanel'); p.classList.toggle('hidden'); if (!p.classList.contains('hidden')) drawPanel(); });
+document.addEventListener('click', e => { if (!e.target.closest('.bellwrap')) $('#npanel').classList.add('hidden'); });
+$('#npanel').addEventListener('click', async e => {
+  if (e.target.id === 'readAll') { for (const n of notes) updateDoc(doc(db, 'notifications', n.id), { read: true }).catch(() => {}); return; }
+  const id = e.target.closest('.ni')?.dataset.id; if (!id) return;
+  const n = notes.find(x => x.id === id);
+  updateDoc(doc(db, 'notifications', id), { read: true }).catch(() => {});
+  $('#npanel').classList.add('hidden');
+  if (n?.date) { cal.cursor = n.date; }
+  location.hash = '#/calendar'; route();
+});
+
+// ---------------- 行事曆 ----------------
+const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', sales: '', engineer: '', type: '' };
+const schedCache = new Map(); // 'YYYY-MM' -> [schedules]
+const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const ymdOf = d => d.toLocaleDateString('sv-SE');
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const WD = ['日', '一', '二', '三', '四', '五', '六'];
+
+function afterRecordChange(c) {
+  if (location.hash.startsWith('#/calendar')) viewCalendar();
+  else showRecords(c, true);
+  if (c?.id) recCache.delete(c.id);
+}
+async function loadMonth(ym) {
+  if (schedCache.has(ym)) return schedCache.get(ym);
+  const snap = await getDocs(query(collection(db, 'schedules'), where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')));
+  const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  schedCache.set(ym, list);
+  return list;
+}
+function calRange() {
+  const cur = toDate(cal.cursor);
+  if (cal.view === 'week') { const start = addDays(cur, -cur.getDay()); return [start, addDays(start, 6)]; }
+  const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
+  const last = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+  if (cal.view === 'list') return [first, last];
+  return [addDays(first, -first.getDay()), addDays(last, 6 - last.getDay())];
+}
+async function viewCalendar() {
+  const [start, end] = calRange();
+  const months = [...new Set([ymdOf(start).slice(0, 7), ymdOf(end).slice(0, 7)])];
+  let all = [];
+  try { for (const m of months) all = all.concat(await loadMonth(m)); } catch (e) { app.innerHTML = `<div class="card"><p>行程載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!location.hash.startsWith('#/calendar')) return;
+  const s0 = ymdOf(start), s1 = ymdOf(end);
+  const list = all.filter(x => x.date >= s0 && x.date <= s1)
+    .filter(x => !cal.region || x.region === cal.region)
+    .filter(x => !cal.sales || x.salesEmail === cal.sales)
+    .filter(x => !cal.engineer || x.engineerEmail === cal.engineer)
+    .filter(x => !cal.type || x.type === cal.type)
+    .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+  const cur = toDate(cal.cursor);
+  const title = cal.view === 'week' ? `${ymdOf(start)} ～ ${ymdOf(end)}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
+  const today = ymdOf(new Date());
+  const chip = x => `<span class="ev ${x.type === 'engineer' ? 'engineer' : ''}" data-sid="${esc(x.id)}" title="${esc(x.customerName)}">${esc(x.startTime)} ${esc(x.customerName)}</span>`;
+  let body = '';
+  if (cal.view === 'list') {
+    body = list.length ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>客戶</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>地點／方式</th></tr></thead><tbody class="click">${list.map(x => `<tr data-sid="${esc(x.id)}"><td>${esc(x.date)}（${WD[toDate(x.date).getDay()]}）</td><td>${esc(x.startTime)}${x.endTime ? '～' + esc(x.endTime) : ''}</td><td>${esc(x.customerName)}</td><td>${DEMO_TYPE[x.type] || ''}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${esc(x.place)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">這個月沒有行程</p>';
+  } else {
+    const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
+    body = `<div class="cal ${cal.view === 'week' ? 'week' : ''}">${WD.map(w => `<div class="dh">${w}</div>`).join('')}${days.map(d => {
+      const dd = toDate(d); const out = cal.view === 'month' && dd.getMonth() !== cur.getMonth();
+      return `<div class="dc ${out ? 'out' : ''} ${d === today ? 'today' : ''}" data-day="${d}"><span class="dn">${cal.view === 'week' ? (dd.getMonth() + 1) + '/' : ''}${dd.getDate()}</span>${list.filter(x => x.date === d).map(chip).join('')}</div>`;
+    }).join('')}</div><div class="legend"><span>業務 Demo</span><span class="engineer">工程師 Demo</span><span>點空白日期可新增行程</span></div>`;
+  }
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><h1 style="margin:0">行事曆</h1><span class="spacer"></span><button id="addS">＋ 新增行程</button></div>
+    <div class="toolbar">
+      <button class="ghost small" id="prev">‹</button><button class="ghost small" id="today">今天</button><button class="ghost small" id="next">›</button>
+      <strong style="margin:0 8px">${title}</strong>
+      <div class="seg" id="vseg">${[['month', '月'], ['week', '週'], ['list', '清單']].map(([k, t]) => `<button data-v="${k}" class="${cal.view === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <span class="spacer"></span>
+      <select id="cRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${cal.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
+      <select id="cSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], cal.sales)}</select>
+      <select id="cEng"><option value="">全部工程師</option>${userOptions(['engineer'], cal.engineer)}</select>
+      <select id="cType"><option value="">全部類型</option>${Object.entries(DEMO_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <button class="ghost small" id="cRefresh">重新整理</button>
+    </div>
+    <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆行程</div>
+    ${body}
+  </div>`;
+  const move = n => { const c0 = toDate(cal.cursor); cal.cursor = ymdOf(cal.view === 'week' ? addDays(c0, 7 * n) : new Date(c0.getFullYear(), c0.getMonth() + n, 1)); viewCalendar(); };
+  $('#prev').onclick = () => move(-1); $('#next').onclick = () => move(1);
+  $('#today').onclick = () => { cal.cursor = ymdOf(new Date()); viewCalendar(); };
+  $('#vseg').onclick = e => { const v = e.target.dataset.v; if (v) { cal.view = v; viewCalendar(); } };
+  $('#cRegion').onchange = e => { cal.region = e.target.value; viewCalendar(); };
+  $('#cSales').onchange = e => { cal.sales = e.target.value; viewCalendar(); };
+  $('#cEng').onchange = e => { cal.engineer = e.target.value; viewCalendar(); };
+  $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
+  $('#cRefresh').onclick = () => { schedCache.clear(); viewCalendar(); };
+  $('#addS').onclick = () => pickCustomer(c => recordForm('schedules', c, null, { date: cal.cursor }));
+  app.querySelector('.card').addEventListener('click', e => {
+    const sid = e.target.closest('[data-sid]')?.dataset.sid;
+    if (sid) { const x = list.find(y => y.id === sid); if (x) scheduleDetail(x); return; }
+    const day = e.target.closest('.dc')?.dataset.day;
+    if (day) pickCustomer(c => recordForm('schedules', c, null, { date: day }));
+  });
+}
+function stubCustomer(x) {
+  return customers.get(x.customerId) || { id: x.customerId, name: x.customerName, status: 'formal', formalNo: x.customerNo, region: x.region };
+}
+function scheduleDetail(x) {
+  const R = REC.schedules;
+  const dlg = document.createElement('dialog');
+  const f = (l, v) => `<div class="field"><label>${l}</label><div class="val">${esc(v) || '<span class="muted">—</span>'}</div></div>`;
+  dlg.innerHTML = `<h1>${esc(x.customerName)}</h1><p class="muted">${esc(x.customerNo)}</p>
+    <div class="grid">${f('日期', `${x.date}（${WD[toDate(x.date).getDay()]}）`)}${f('時間', x.startTime + (x.endTime ? '～' + x.endTime : ''))}${f('類型', DEMO_TYPE[x.type])}${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}${f('地點／方式', x.place)}${f('建立者', salesLabel(x.createdBy))}<div class="field full"><label>備註</label><div class="val" style="white-space:pre-wrap">${esc(x.note) || '<span class="muted">—</span>'}</div></div></div>
+    <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
+      ${customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : ''}
+      ${R.canDel(x) ? '<button class="danger" data-a="del">刪除</button>' : ''}${R.canEdit(x) ? '<button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.addEventListener('click', async e => {
+    const a = e.target.dataset.a; if (!a) return;
+    if (a === 'close') close();
+    if (a === 'open') { close(); location.hash = '#/customer/' + encodeURIComponent(x.customerId); }
+    if (a === 'edit') { close(); recordForm('schedules', stubCustomer(x), x); }
+    if (a === 'del') {
+      if (!confirm('確定刪除這個行程？')) return;
+      try { await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); recCache.delete(x.customerId); viewCalendar(); } catch (err) { toast(errMsg(err)); }
+    }
+  });
+  dlg.showModal();
+}
+function pickCustomer(cb) {
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<h1>選擇客戶</h1><input id="pq" placeholder="輸入名稱、編號、聯絡人搜尋"><div class="pick" id="plist"></div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="pc">取消</button></div>`;
+  document.body.appendChild(dlg);
+  const draw = () => {
+    const q = dlg.querySelector('#pq').value.trim().toLowerCase();
+    const list = [...customers.values()].filter(c => !c.deleted)
+      .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact].some(v => String(v || '').toLowerCase().includes(q)))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant')).slice(0, 50);
+    dlg.querySelector('#plist').innerHTML = list.map(c => `<div data-id="${esc(c.id)}"><strong>${esc(custNo(c))}</strong>　${esc(c.name)} <span class="muted">${esc(c.region)}</span></div>`).join('') || '<p class="muted">找不到客戶</p>';
+  };
+  draw();
+  dlg.querySelector('#pq').addEventListener('input', draw);
+  dlg.querySelector('#pc').onclick = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#plist').addEventListener('click', async e => {
+    const id = e.target.closest('[data-id]')?.dataset.id; if (!id) return;
+    dlg.close(); dlg.remove();
+    const c = customers.get(id);
+    if (!recCache.has(c.id)) { try { await loadRecords(c); } catch (err) { /* 對應行程選單會是空的 */ } }
+    cb(c);
+  });
+  dlg.showModal();
+  dlg.querySelector('#pq').focus();
 }
 
 // ---------------- 人員管理（管理者）----------------
