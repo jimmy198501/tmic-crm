@@ -64,6 +64,15 @@ tbody.click tr:hover{background:#f3f4fb}
 dialog{border:0;border-radius:12px;padding:24px;max-width:760px;width:calc(100% - 32px)}
 dialog::backdrop{background:rgba(20,24,50,.45)}
 .hidden{display:none!important}
+td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
+.files a{display:block;font-size:13px}
+.filelist{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.filelist span{display:flex;gap:8px;align-items:center;font-size:13px}
+.x{background:none;border:0;color:var(--danger);padding:0 4px;cursor:pointer}
+.small{padding:4px 10px;font-size:13px}
+.sec-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sec-head h2{margin:0}
+.full{grid-column:1/-1}
 @media (max-width:640px){header{padding:8px 12px;gap:10px;flex-wrap:wrap}main{padding:16px 12px}.toolbar input{max-width:none}}
 </style>
 </head>
@@ -79,7 +88,7 @@ dialog::backdrop{background:rgba(20,24,50,.45)}
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDoc, getDocs, getDocsFromCache, query, where, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ====== 1. 貼上你的 Firebase 設定（Firebase 主控台 → 專案設定 → 網頁應用程式）======
 const firebaseConfig = {
@@ -90,6 +99,8 @@ const firebaseConfig = {
   messagingSenderId: "202695859419",
   appId: "1:202695859419:web:76d5a9799fc2c6a00300fe"
 };
+// ====== 2. 貼上 Google Apps Script 網頁應用程式網址（檔案上傳用）======
+const UPLOAD_URL = '';
 // ==========================================================================
 
 const fbApp = initializeApp(firebaseConfig);
@@ -314,10 +325,11 @@ function viewCustomer(id) {
     </div>
     ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('購買產品', c.purchasedProduct)}${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}</div>` : ''}
   </div>
-  <div class="card"><h2>關聯紀錄</h2><p class="muted">採購紀錄、問題追蹤、工程師安裝紀錄、Demo 紀錄將在下一版加入。</p></div>`;
+  <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>`;
   $('#edit')?.addEventListener('click', () => customerForm(c));
   $('#conv')?.addEventListener('click', () => convertToFormal(c));
   $('#del')?.addEventListener('click', () => deleteCustomer(c));
+  showRecords(c);
 }
 
 // ---------------- 新增／編輯客戶 ----------------
@@ -429,6 +441,165 @@ async function deleteCustomer(c) {
     toast('已刪除');
     location.hash = '#/customers';
   } catch (e) { toast(errMsg(e)); }
+}
+
+// ---------------- 關聯紀錄（採購、問題追蹤、安裝、Demo）----------------
+const isEngineer = () => me?.role === 'engineer';
+const userOptions = (roles, sel) => [...users.values()].filter(u => roles.includes(u.role))
+  .sort((a, b) => (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'))
+  .map(u => `<option value="${esc(u.email)}" ${u.email === sel ? 'selected' : ''}>${esc(salesLabel(u.email))}</option>`).join('');
+const DEMO_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo' };
+
+const REC = {
+  demos: {
+    title: 'Demo 紀錄', top: true,
+    canAdd: () => true,
+    canEdit: r => isAdmin() || r.createdBy === me.email,
+    canDel: r => isAdmin() || r.createdBy === me.email,
+    fields: [
+      ['type', '類型', 'select', true, () => Object.entries(DEMO_TYPE).map(([k, t]) => [k, t])],
+      ['date', '日期', 'date', true],
+      ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
+      ['engineerEmail', '工程師', 'user', false, ['engineer']],
+      ['opportunity', '商機', 'list', false, ['中', '暫無需求']],
+      ['period', '期程', 'list', false, ['中期', '長期']],
+      ['participants', '參與人員', 'text'],
+      ['products', '介紹產品', 'list', false, ['IronCAD', 'IronCAD Mechanical', 'IronCAD Draft', 'ENCY CAM', 'ENCY Robot', 'DDM (PDM)']],
+      ['content', '內容', 'textarea', false, null, true]
+    ],
+    cols: [['date', '日期'], ['type', '類型', r => DEMO_TYPE[r.type] || ''], ['salesEmail', '業務', r => salesLabel(r.salesEmail)], ['engineerEmail', '工程師', r => salesLabel(r.engineerEmail)], ['opportunity', '商機'], ['period', '期程'], ['products', '介紹產品'], ['content', '內容', null, true]]
+  },
+  purchases: {
+    title: '採購紀錄', kind: 'purchase',
+    canAdd: () => isAdmin(), canEdit: () => isAdmin(), canDel: () => isAdmin(),
+    fields: [['date', '採購日期', 'date', true], ['summary', '採購內容簡要', 'textarea', true, null, true], ['files', '序號檔／購買證明', 'files', false, null, true]],
+    cols: [['date', '採購日期'], ['summary', '採購內容簡要', null, true], ['files', '檔案']]
+  },
+  issues: {
+    title: '問題追蹤', kind: 'issue',
+    canAdd: () => isAdmin() || isEngineer(), canEdit: () => isAdmin() || isEngineer(), canDel: () => isAdmin(),
+    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['status', '狀態', 'list', false, ['發問中', '處理中', '已解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
+    cols: [['date', '日期'], ['title', '名稱'], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
+  },
+  installs: {
+    title: '工程師安裝紀錄',
+    canAdd: () => isAdmin() || isEngineer(), canEdit: () => isAdmin() || isEngineer(), canDel: () => isAdmin(),
+    fields: [['date', '安裝日期', 'date', true], ['software', '安裝軟體', 'list', true, ['IronCAD', 'IronCAD Draft', 'ENCY CAM', 'DDM (PDM)']], ['version', '安裝版本', 'text'], ['note', '安裝註記', 'textarea', false, null, true]],
+    cols: [['date', '安裝日期'], ['software', '安裝軟體'], ['version', '安裝版本'], ['note', '安裝註記', null, true]]
+  }
+};
+const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
+const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
+
+function recCol(key, c) { return REC[key].top ? collection(db, key) : collection(db, 'customers', c.id, key); }
+async function loadRecords(c) {
+  const out = {};
+  out.demos = (await getDocs(query(collection(db, 'demos'), where('customerId', '==', c.id)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  for (const k of ['purchases', 'issues', 'installs']) out[k] = (await getDocs(recCol(k, c))).docs.map(d => ({ id: d.id, ...d.data() }));
+  recCache.set(c.id, out);
+  return out;
+}
+async function showRecords(c, reload = false) {
+  let data = recCache.get(c.id);
+  if (!data || reload) {
+    try { data = await loadRecords(c); } catch (e) { const box = $('#records'); if (box) box.innerHTML = `<div class="card"><p class="muted">紀錄載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  }
+  const box = $('#records');
+  if (!box || !location.hash.includes(encodeURIComponent(c.id))) return;
+  const keys = REC_ORDER.filter(k => k !== 'purchases' || c.status === 'formal' || (data.purchases || []).length);
+  box.innerHTML = keys.map(k => {
+    const R = REC[k];
+    const rows = [...(data[k] || [])].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const cell = (r, [f, , fn, wrap]) => {
+      if (f === 'files') return `<td class="files">${(r.files || []).map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>`).join('') || '—'}</td>`;
+      if (f === 'link' && r.link) return `<td><a href="${esc(r.link)}" target="_blank" rel="noopener">開啟</a></td>`;
+      const v = fn ? fn(r) : r[f];
+      return `<td class="${wrap ? 'wrap' : ''}">${esc(v) || '—'}</td>`;
+    };
+    return `<div class="card" data-k="${k}">
+      <div class="sec-head"><h2>${R.title}</h2><span class="muted">${rows.length} 筆</span><span class="spacer"></span>${R.canAdd() ? `<button class="small" data-act="add">＋ 新增</button>` : ''}</div>
+      ${rows.length ? `<div class="tablewrap"><table><thead><tr>${R.cols.map(([, t]) => `<th>${t}</th>`).join('')}<th>建立者</th><th></th></tr></thead><tbody>
+        ${rows.map(r => `<tr data-id="${esc(r.id)}">${R.cols.map(col => cell(r, col)).join('')}<td>${esc(salesLabel(r.createdBy))}</td>
+          <td class="row-actions">${R.canEdit(r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="muted">尚無紀錄</p>'}
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.card[data-k]').forEach(card => card.addEventListener('click', async e => {
+    const act = e.target.dataset.act; if (!act) return;
+    const k = card.dataset.k; const id = e.target.closest('tr')?.dataset.id;
+    const r = id ? (recCache.get(c.id)[k] || []).find(x => x.id === id) : null;
+    if (act === 'add') recordForm(k, c, null);
+    if (act === 'edit' && r) recordForm(k, c, r);
+    if (act === 'del' && r) {
+      if (!confirm(`確定刪除這筆${REC[k].title}？`)) return;
+      try { await deleteDoc(doc(recCol(k, c), r.id)); toast('已刪除'); showRecords(c, true); } catch (err) { toast(errMsg(err)); }
+    }
+  }));
+}
+
+async function uploadFile(file, kind, customerNo) {
+  if (!UPLOAD_URL) throw new Error('尚未設定檔案上傳網址（UPLOAD_URL）');
+  if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} 超過 10MB`);
+  const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(file); });
+  const idToken = await auth.currentUser.getIdToken();
+  const resp = await fetch(UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'upload', idToken, kind, customerNo, name: file.name, mimeType: file.type, data }) });
+  const j = await resp.json();
+  if (!j.ok) throw new Error(j.error || '上傳失敗');
+  return { name: j.name, url: j.url };
+}
+
+function recordForm(k, c, r) {
+  const R = REC[k];
+  const isNew = !r;
+  const cur = r || (k === 'demos' ? { type: me.role === 'engineer' ? 'engineer' : 'sales', date: new Date().toLocaleDateString('sv-SE'), salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : (c.salesEmail || ''), engineerEmail: me.role === 'engineer' ? me.email : '' } : { date: new Date().toLocaleDateString('sv-SE') });
+  let files = [...(cur.files || [])];
+  const field = ([f, t, type, req, opt, full]) => {
+    const lab = `<label>${t}${req ? ' *' : ''}</label>`;
+    const cls = `field${full ? ' full' : ''}`;
+    if (type === 'textarea') return `<div class="${cls}">${lab}<textarea name="${f}" rows="4">${esc(cur[f])}</textarea></div>`;
+    if (type === 'date') return `<div class="${cls}">${lab}<input type="date" name="${f}" value="${esc(cur[f])}"></div>`;
+    if (type === 'select') return `<div class="${cls}">${lab}<select name="${f}">${opt().map(([v, tt]) => `<option value="${v}" ${cur[f] === v ? 'selected' : ''}>${tt}</option>`).join('')}</select></div>`;
+    if (type === 'user') return `<div class="${cls}">${lab}<select name="${f}"><option value="">（未指定）</option>${userOptions(opt, cur[f])}</select></div>`;
+    if (type === 'list') return `<div class="${cls}">${lab}<input name="${f}" list="dl_${f}" value="${esc(cur[f])}"><datalist id="dl_${f}">${opt.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>`;
+    if (type === 'files') return `<div class="${cls}">${lab}<div class="filelist" id="flist"></div><input type="file" name="__files" multiple accept=".pdf,image/*,.lic,.dat,.txt,.zip"><div class="muted">每個檔案 10MB 以內，存放於 Google Drive</div></div>`;
+    return `<div class="${cls}">${lab}<input name="${f}" value="${esc(cur[f])}"></div>`;
+  };
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted">${esc(custNo(c))}　${esc(c.name)}</p>
+    <div class="grid">${R.fields.map(field).join('')}</div>
+    <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
+  document.body.appendChild(dlg);
+  const form = dlg.querySelector('#rf');
+  const drawFiles = () => { const fl = dlg.querySelector('#flist'); if (fl) fl.innerHTML = files.map((x, i) => `<span><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a><button type="button" class="x" data-i="${i}">✕</button></span>`).join(''); };
+  drawFiles();
+  dlg.querySelector('#flist')?.addEventListener('click', e => { const i = e.target.dataset.i; if (i !== undefined) { files.splice(Number(i), 1); drawFiles(); } });
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#cancel').addEventListener('click', close);
+  dlg.addEventListener('cancel', () => dlg.remove());
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = {};
+    for (const [f, t, type, req] of R.fields) {
+      if (type === 'files') continue;
+      data[f] = String(form[f].value || '').trim();
+      if (req && !data[f]) return toast(`請填寫${t}`);
+    }
+    const saveBtn = dlg.querySelector('#save');
+    saveBtn.disabled = true;
+    try {
+      const picker = form.querySelector('input[name=__files]');
+      if (picker && picker.files.length) {
+        saveBtn.textContent = '上傳中…';
+        for (const f of picker.files) files.push(await uploadFile(f, R.kind, custNo(c) || c.leadNo || c.id));
+      }
+      if (R.fields.some(x => x[2] === 'files')) data.files = files;
+      if (k === 'demos') Object.assign(data, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c) });
+      if (isNew) await addDoc(recCol(k, c), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() });
+      else await updateDoc(doc(recCol(k, c), r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+      close(); toast('已儲存'); showRecords(c, true);
+    } catch (err) { toast(errMsg(err)); saveBtn.disabled = false; saveBtn.textContent = '儲存'; }
+  });
+  dlg.showModal();
 }
 
 // ---------------- 人員管理（管理者）----------------
