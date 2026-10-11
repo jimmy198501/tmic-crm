@@ -139,7 +139,7 @@ const ROLE = { admin: '管理者', manager: '業務主管', sales: '業務', eng
 const REGIONS = ['台北', '台中', '台南'];
 const REGION_CODE = { '台北': 'A', '台中': 'B', '台南': 'C' };
 const LICENSES = [['serial', '單機綁序號'], ['dongle', '單機綁Dongle'], ['netPc', '網路綁電腦'], ['netDongle', '網路綁Dongle']];
-const COMMON = [['name', '客戶名稱', true], ['companyProduct', '公司產品（客戶本業）'], ['industry', '行業別'], ['address', '公司地址'], ['currentSoftware', '現用軟體'], ['contact', '聯絡人'], ['phone', '電話'], ['mobile', '行動電話'], ['email', 'E-Mail']];
+const COMMON = [['name', '客戶名稱', true], ['companyProduct', '公司產品（客戶本業）'], ['industry', '行業別'], ['address', '公司地址'], ['currentSoftware', '現用軟體'], ['contact', '聯絡人'], ['phone', '電話'], ['mobile', '行動電話'], ['email', 'E-Mail'], ['website', '公司官網']];
 const COUNTERS = [['lead_A', '台北潛在客戶', 'L-A'], ['lead_B', '台中潛在客戶', 'L-B'], ['lead_C', '台南潛在客戶', 'L-C'], ['formal', '正式客戶', 'C']];
 
 let me = null;
@@ -360,7 +360,7 @@ function viewCustomer(id) {
     <h2>基本資料</h2>
     <div class="grid">
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
-      ${COMMON.slice(1).map(([k, t]) => f(t, c[k])).join('')}
+      ${COMMON.slice(1).map(([k, t]) => k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
     </div>
     ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('購買產品', c.purchasedProduct)}${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}</div>` : ''}
   </div>
@@ -372,9 +372,9 @@ function viewCustomer(id) {
 }
 
 // ---------------- 新增／編輯客戶 ----------------
-function customerForm(c) {
+function customerForm(c, preset = {}, onCreated = null) {
   const isNew = !c;
-  const cur = c || { status: 'potential', license: {} };
+  const cur = c || { status: 'potential', license: {}, ...preset };
   const inp = (k, t, req) => `<div class="field"><label>${t}${req ? ' *' : ''}</label><input name="${k}" value="${esc(cur[k])}"></div>`;
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<form id="cf">
@@ -443,6 +443,7 @@ function customerForm(c) {
       close();
       await syncCustomers();
       toast('已儲存');
+      if (isNew && onCreated) { try { await onCreated(id); } catch (e2) { /* 連結行程失敗不影響客戶建立 */ } }
       if (isNew) location.hash = '#/customer/' + encodeURIComponent(id); else route();
     } catch (err) {
       toast(errMsg(err));
@@ -822,6 +823,7 @@ function scheduleDetail(x) {
       <div class="field full"><label>內容</label><div class="val" style="white-space:pre-wrap">${esc(x.content) || '<span class="muted">—</span>'}</div></div>
       ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
+      ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
       ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
@@ -830,12 +832,53 @@ function scheduleDetail(x) {
     const a = e.target.dataset.a; if (!a) return;
     if (a === 'close') close();
     if (a === 'edit') { close(); scheduleForm(x); }
+    if (a === 'open') { close(); location.hash = '#/customer/' + encodeURIComponent(x.customerId); }
+    if (a === 'conv') {
+      close();
+      customerForm(null, scheduleToCustomer(x), async id => {
+        await updateDoc(doc(db, 'schedules', x.id), { customerId: id, updatedBy: me.email, updatedAt: serverTimestamp() });
+        schedCache.clear();
+      });
+    }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
       try { await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); viewCalendar(); } catch (err) { toast(errMsg(err)); }
     }
   });
   dlg.showModal();
+}
+
+// 從行程內容自動帶入潛在客戶欄位（「標籤：內容」格式的每一行）
+const SCHED_LABELS = [
+  ['name', ['客戶名稱', '客戶全稱', '公司名稱']],
+  ['contact', ['聯絡窗口', '聯繫窗口', '聯絡人']],
+  ['mobile', ['行動電話', '手機']],
+  ['phone', ['聯絡電話', '電話']],
+  ['address', ['公司地址', '地址']],
+  ['companyProduct', ['公司產品']],
+  ['currentSoftware', ['使用軟體', '公司軟體', '現用軟體']],
+  ['industry', ['行業別']],
+  ['email', ['E-Mail', 'Email', '信箱']],
+  ['website', ['公司官網', '官網', '公司網址']]
+];
+function scheduleToCustomer(x) {
+  const out = { status: 'potential', region: x.region || '', salesEmail: x.salesEmail || '' };
+  for (const line of String(x.content || '').split('\n')) {
+    const m = line.match(/^\s*([^：:]{1,12})\s*[：:]\s*(.+?)\s*$/);
+    if (!m) continue;
+    const hit = SCHED_LABELS.find(([, labels]) => labels.some(l => l.toLowerCase() === m[1].trim().toLowerCase()));
+    if (!hit || out[hit[0]]) continue;
+    out[hit[0]] = m[2];
+  }
+  // 「04-7683999 / 0981-315905」：09 開頭的拆到行動電話
+  if (out.phone && /[\/／]/.test(out.phone)) {
+    const parts = out.phone.split(/\s*[\/／]\s*/);
+    const mob = parts.find(p => /^09/.test(p.replace(/\D/g, '')));
+    if (mob && !out.mobile) { out.mobile = mob; out.phone = parts.filter(p => p !== mob).join(' / '); }
+  }
+  if (!out.address && x.place) out.address = x.place;
+  if (!out.name) out.name = String(x.title || '').split(/[-－\[［(（]/)[0].trim();
+  return out;
 }
 
 function scheduleForm(r, preset = {}) {
