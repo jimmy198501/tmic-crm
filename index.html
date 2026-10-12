@@ -94,6 +94,29 @@ tr.left td{color:#9aa}
 .ev.leave{background:#D32F2F}
 .ev.holiday{background:#F6C026;color:#3a2e00;cursor:default}
 .ev.none{background:#78849E}
+.wk-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+.wk{min-width:640px}
+.wk-row{display:grid;grid-template-columns:56px repeat(7,minmax(0,1fr))}
+.wk-lab{font-size:11px;color:var(--muted);text-align:right;padding:6px 6px 0 0}
+.wk-head{border-bottom:1px solid var(--line);background:#fafbfd}
+.wk-dh{text-align:center;padding:6px 0;display:flex;flex-direction:column;align-items:center;gap:2px}
+.wk-dh small{color:var(--muted);font-size:12px}
+.wk-dh b{font-size:16px;color:var(--ink);font-weight:500;padding:0 8px;border-radius:999px}
+.wk-dh.today b{background:var(--navy);color:#fff}
+.wk-all{border-bottom:2px solid var(--line)}
+.wk-ad{min-height:30px;padding:3px;border-left:1px solid var(--line);cursor:pointer;min-width:0}
+.wk-body{position:relative}
+.wk-times{position:relative}
+.wk-times span{position:absolute;right:6px;font-size:11px;color:var(--muted);transform:translateY(-50%);white-space:nowrap}
+.wk-times span:first-child{transform:none}
+.wk-col{position:relative;border-left:1px solid var(--line);cursor:pointer;background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 48px)}
+.wk-col.today{background-color:#f7f8fe}
+.tev{position:absolute;border-radius:6px;padding:3px 6px;color:#fff;font-size:12px;line-height:1.35;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px #fff;display:flex;flex-direction:column}
+.tev b{font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.tev span{opacity:.9;font-size:11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tev.north{background:#3F51B5}.tev.midsouth{background:#2E7D32}.tev.leave{background:#D32F2F}.tev.none{background:#78849E}
+.wk-now{position:absolute;left:-1px;right:0;height:2px;background:#D93025;z-index:2;pointer-events:none}
+.wk-now::before{content:'';position:absolute;left:-5px;top:-4px;width:10px;height:10px;border-radius:50%;background:#D93025}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .plain::before{display:none}
@@ -163,7 +186,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-12b</div>
+<div class="ver">版本 2026-10-12c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -896,6 +919,8 @@ async function viewCalendar() {
       ${hols.map(([d, n]) => `<tr><td>${d}（${WD[toDate(d).getDay()]}）</td><td>全天</td><td><span class="ev holiday">${esc(n)}</span></td><td>國定假日</td><td></td><td></td><td></td><td></td></tr>`).join('')}
       ${list.map(x => `<tr data-sid="${esc(x.id)}"><td>${esc(dateRangeText(x))}</td><td>${esc(timeText(x))}</td><td><span class="ev ${evColor(x)}">${esc(x.title)}</span></td><td>${SCHED_TYPE[x.type] || ''}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${esc(x.place)}</td></tr>`).join('')}
     </tbody></table></div>` : '<p class="muted">這個月沒有行程</p>';
+  } else if (cal.view === 'week') {
+    body = weekGrid(start, end, list, hol, today, chip);
   } else {
     const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
     body = `<div class="cal ${cal.view === 'week' ? 'week' : ''}">${WD.map(w => `<div class="dh">${w}</div>`).join('')}${days.map(d => {
@@ -931,9 +956,53 @@ async function viewCalendar() {
   app.querySelector('.card').addEventListener('click', e => {
     const sid = e.target.closest('[data-sid]')?.dataset.sid;
     if (sid) { const x = list.find(y => y.id === sid); if (x) scheduleDetail(x); return; }
-    const day = e.target.closest('.dc')?.dataset.day;
+    const col = e.target.closest('.wk-col');
+    if (col) {
+      const h0 = Number(col.dataset.h0), y = e.clientY - col.getBoundingClientRect().top;
+      const m = h0 * 60 + Math.floor(y / WK_H * 2) * 30, hm = n => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
+      return scheduleForm(null, { date: col.dataset.day, startTime: hm(m), endTime: hm(Math.min(m + 60, 23 * 60 + 59)) });
+    }
+    const day = e.target.closest('.dc, .wk-ad')?.dataset.day;
     if (day) scheduleForm(null, { date: day });
   });
+}
+
+// 週檢視：左側時間軸（像 Google 日曆）
+const WK_H = 48; // 每小時高度
+const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+function weekGrid(start, end, list, hol, today, chip) {
+  const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
+  const timed = list.filter(x => x.startTime && endOf(x) === x.date);
+  const allDay = list.filter(x => !x.startTime || endOf(x) !== x.date);
+  const endMin = x => Math.max(x.endTime ? toMin(x.endTime) : toMin(x.startTime) + 60, toMin(x.startTime) + 30);
+  let h0 = 8, h1 = 19;
+  timed.forEach(x => { h0 = Math.min(h0, Math.floor(toMin(x.startTime) / 60)); h1 = Math.max(h1, Math.ceil(endMin(x) / 60)); });
+  h1 = Math.min(h1, 24);
+  const hours = []; for (let h = h0; h < h1; h++) hours.push(h);
+  // 同時段重疊的行程並排
+  const place = evs => {
+    evs.sort((a, b) => toMin(a.startTime) - toMin(b.startTime) || endMin(b) - endMin(a));
+    let group = [], colsEnd = [], gEnd = -1;
+    const flush = () => { group.forEach(g => g.n = colsEnd.length); group = []; colsEnd = []; };
+    return evs.map(x => {
+      const s0 = toMin(x.startTime), e0 = endMin(x);
+      if (s0 >= gEnd) { flush(); gEnd = -1; }
+      let c = colsEnd.findIndex(e => e <= s0); if (c < 0) { c = colsEnd.length; colsEnd.push(e0); } else colsEnd[c] = e0;
+      gEnd = Math.max(gEnd, e0);
+      const o = { x, c, s0, e0 }; group.push(o); return o;
+    }).map((o, i, arr) => { if (i === arr.length - 1) flush(); return o; });
+  };
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const H = (h1 - h0) * WK_H;
+  return `<div class="wk-wrap"><div class="wk">
+    <div class="wk-row wk-head"><div class="wk-lab"></div>${days.map(d => { const dd = toDate(d); return `<div class="wk-dh ${d === today ? 'today' : ''}"><small>週${WD[dd.getDay()]}</small><b>${dd.getMonth() + 1}/${dd.getDate()}</b></div>`; }).join('')}</div>
+    <div class="wk-row wk-all"><div class="wk-lab">全天</div>${days.map(d => `<div class="wk-ad" data-day="${d}">${hol.has(d) ? `<span class="ev holiday">${esc(hol.get(d))}</span>` : ''}${allDay.filter(x => x.date <= d && endOf(x) >= d).map(chip).join('')}</div>`).join('')}</div>
+    <div class="wk-row wk-body"><div class="wk-times" style="height:${H}px">${hours.map(h => `<span style="top:${(h - h0) * WK_H}px">${h < 12 ? '上午' : '下午'}${h <= 12 ? h : h - 12}點</span>`).join('')}</div>
+    ${days.map(d => `<div class="wk-col ${d === today ? 'today' : ''}" data-day="${d}" data-h0="${h0}" style="height:${H}px">${place(timed.filter(x => x.date === d)).map(o => {
+      const top = (o.s0 - h0 * 60) / 60 * WK_H, ht = Math.max((o.e0 - o.s0) / 60 * WK_H - 2, 20);
+      return `<div class="tev ${evColor(o.x)}" data-sid="${esc(o.x.id)}" title="${esc(o.x.title)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)"><b>${esc(o.x.title)}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}</div>`;
+    }).join('')}${d === today && nowMin >= h0 * 60 && nowMin <= h1 * 60 ? `<div class="wk-now" style="top:${(nowMin - h0 * 60) / 60 * WK_H}px"></div>` : ''}</div>`).join('')}</div>
+  </div></div>`;
 }
 
 const canEditSched = x => isAdmin() || x.createdBy === me.email;
@@ -949,7 +1018,7 @@ function scheduleDetail(x) {
       ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
       ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
-      ${demoTypes().map(t => `<button class="accent" data-a="demo" data-t="${t}">轉為${DEMO_TYPE[t]}紀錄</button>`).join('')}
+      ${demoTypes().filter(t => isAdmin() || (t === 'sales' ? x.salesEmail : x.engineerEmail) === me.email).map(t => `<button class="accent" data-a="demo" data-t="${t}">轉為${DEMO_TYPE[t]}紀錄</button>`).join('')}
       ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
