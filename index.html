@@ -186,7 +186,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-12c</div>
+<div class="ver">版本 2026-10-12d</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -640,7 +640,7 @@ const REC = {
   purchases: {
     title: '採購紀錄', kind: 'purchase',
     canAdd: () => isAdmin(), canEdit: () => isAdmin(), canDel: () => isAdmin(),
-    fields: [['date', '採購日期', 'date', true], ['summary', '採購內容簡要', 'textarea', true, null, true], ['files', '序號檔／購買證明', 'files', false, null, true]],
+    fields: [['date', '採購日期', 'date', false], ['summary', '採購內容簡要', 'textarea', true, null, true], ['files', '序號檔／購買證明', 'files', false, null, true]],
     cols: [['date', '採購日期'], ['summary', '採購內容簡要', null, true], ['files', '檔案']]
   },
   issues: {
