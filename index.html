@@ -968,15 +968,38 @@ const RTABS = [
   ['installs', '工程師安裝紀錄', 'installs']
 ];
 const seesAllRecs = () => isAdmin() || isEngineer();
-const recsUI = { tab: 'sdemo', ym: new Date().toLocaleDateString('sv-SE').slice(0, 7), region: '', sales: '', engineer: '', q: '', sort: 'date', dir: -1 };
+const recsUI = { unlinked: false, tab: 'sdemo', ym: new Date().toLocaleDateString('sv-SE').slice(0, 7), region: '', sales: '', engineer: '', q: '', sort: 'date', dir: -1 };
 const recsCache = new Map(); // `${collection}|${ym}` -> rows
 
+const UNLINKED_ID = 'imp_unlinked';
+const toRow = d => ({ id: d.id, ...d.data(), customerId: d.data().customerId || d.ref.parent.parent?.id });
+// 「全部」：先讀本機快取，再只向伺服器抓有變動的，節省讀取額度
+async function loadRecsAll(col, full = false) {
+  const key = col + '|all';
+  if (recsCache.has(key) && !full) return recsCache.get(key);
+  const base = col === 'demos' ? collection(db, 'demos') : collectionGroup(db, col);
+  const map = new Map(); let max = null;
+  if (!full) {
+    try {
+      (await getDocsFromCache(base)).docs.forEach(d => {
+        map.set(d.ref.path, toRow(d));
+        const u = d.data().updatedAt;
+        if (!d.metadata.hasPendingWrites && u && (!max || u.toMillis() > max.toMillis())) max = u;
+      });
+    } catch (e) { /* 沒有快取就全部抓 */ }
+  }
+  (await getDocs(max ? query(base, where('updatedAt', '>', max)) : base)).docs.forEach(d => map.set(d.ref.path, toRow(d)));
+  const rows = [...map.values()];
+  recsCache.set(key, rows);
+  return rows;
+}
 async function loadRecsMonth(col, ym) {
+  if (ym === 'all') return loadRecsAll(col);
   const key = col + '|' + ym;
   if (recsCache.has(key)) return recsCache.get(key);
   const range = [where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')];
   const snap = await getDocs(col === 'demos' ? query(collection(db, 'demos'), ...range) : query(collectionGroup(db, col), ...range));
-  const rows = snap.docs.map(d => ({ id: d.id, ...d.data(), customerId: d.data().customerId || d.ref.parent.parent?.id }));
+  const rows = snap.docs.map(toRow);
   recsCache.set(key, rows);
   return rows;
 }
@@ -996,7 +1019,9 @@ async function viewRecords() {
   catch (e) { app.innerHTML = `<div class="card"><h1>紀錄</h1><p>載入失敗：${linkify(errMsg(e))}</p><p class="muted">若訊息裡有連結，請用管理者帳號點開並建立索引，幾分鐘後再重新整理。</p></div>`; return; }
   if (!location.hash.startsWith('#/records')) return;
   const q = recsUI.q.trim().toLowerCase();
-  const list = rows.filter(r => !demoType || r.type === demoType).map(r => ({ r, c: recCustomer(r) }))
+  const typed = rows.filter(r => !demoType || r.type === demoType);
+  const unlinkedN = typed.filter(r => r.customerId === UNLINKED_ID).length;
+  const list = typed.filter(r => !recsUI.unlinked || r.customerId === UNLINKED_ID).map(r => ({ r, c: recCustomer(r) }))
     .filter(({ r, c }) => !recsUI.region || (c.region || r.region) === recsUI.region)
     .filter(({ r, c }) => !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
     .filter(({ r }) => !recsUI.engineer || r.engineerEmail === recsUI.engineer)
@@ -1011,14 +1036,17 @@ async function viewRecords() {
     const v = fn ? fn(r) : r[f];
     return `<td class="${wrap ? 'wrap' : ''}">${esc(v) || '—'}</td>`;
   };
-  const [y, m] = recsUI.ym.split('-').map(Number);
+  const isAll = recsUI.ym === 'all';
+  const [y, m] = isAll ? [0, 0] : recsUI.ym.split('-').map(Number);
   const isDemo = col === 'demos';
   app.innerHTML = `<div class="card">
     <div class="toolbar"><h1 style="margin:0">紀錄</h1><span class="spacer"></span>${(isDemo ? demoTypes().includes(demoType) : R.canAdd()) ? '<button id="addR">＋ 新增' + tabTitle + '</button>' : ''}</div>
     <div class="toolbar"><div class="seg" id="rtabs">${tabs.map(([k, t]) => `<button data-t="${k}" class="${recsUI.tab === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
     <div class="toolbar">
-      <button class="ghost small" id="rprev">‹</button><button class="ghost small" id="rnow">本月</button><button class="ghost small" id="rnext">›</button>
-      <strong style="margin:0 8px">${y} 年 ${m} 月</strong>
+      <div class="seg"><button id="rMonth" class="${isAll ? '' : 'on'}">依月份</button><button id="rAll" class="${isAll ? 'on' : ''}">全部</button></div>
+      ${isAll ? '<strong style="margin:0 8px">全部紀錄</strong>' : `<button class="ghost small" id="rprev">‹</button><button class="ghost small" id="rnow">本月</button><button class="ghost small" id="rnext">›</button>
+      <strong style="margin:0 8px">${y} 年 ${m} 月</strong>`}
+      ${seesAllRecs() && (unlinkedN || recsUI.unlinked) ? `<button class="small ${recsUI.unlinked ? '' : 'ghost'}" id="rUnl">⚠ 未連結客戶 ${unlinkedN} 筆</button>` : ''}
       <span class="spacer"></span>
       <select id="rRegion"><option value="">全部區域</option>${REGIONS.map(x => `<option ${recsUI.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
       <select id="rSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], recsUI.sales)}</select>
@@ -1029,17 +1057,20 @@ async function viewRecords() {
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆</div>
     ${list.length ? `<div class="tablewrap"><table><thead><tr id="rhead">${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th><th></th></tr></thead>
     <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}">${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td>
-      <td class="row-actions">${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">這個月沒有紀錄</p>'}
+      <td class="row-actions">${isAdmin() ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
   </div>`;
+  const thisMonth = () => new Date().toLocaleDateString('sv-SE').slice(0, 7);
   const moveM = n => { const d = new Date(y, m - 1 + n, 1); recsUI.ym = d.toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
-  $('#rprev').onclick = () => moveM(-1); $('#rnext').onclick = () => moveM(1);
-  $('#rnow').onclick = () => { recsUI.ym = new Date().toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
+  if ($('#rprev')) { $('#rprev').onclick = () => moveM(-1); $('#rnext').onclick = () => moveM(1); $('#rnow').onclick = () => { recsUI.ym = thisMonth(); viewRecords(); }; }
+  $('#rAll').onclick = () => { recsUI.ym = 'all'; viewRecords(); };
+  $('#rMonth').onclick = () => { if (isAll) { recsUI.ym = thisMonth(); recsUI.unlinked = false; viewRecords(); } };
+  $('#rUnl')?.addEventListener('click', () => { recsUI.unlinked = !recsUI.unlinked; if (recsUI.unlinked) recsUI.ym = 'all'; viewRecords(); });
   $('#rtabs').onclick = e => { const t = e.target.dataset.t; if (t) { recsUI.tab = t; viewRecords(); } };
   $('#rRegion').onchange = e => { recsUI.region = e.target.value; viewRecords(); };
   $('#rSales').onchange = e => { recsUI.sales = e.target.value; viewRecords(); };
   if ($('#rEng')) $('#rEng').onchange = e => { recsUI.engineer = e.target.value; viewRecords(); };
   $('#rQ').onchange = e => { recsUI.q = e.target.value; viewRecords(); };
-  $('#rRefresh').onclick = () => { recsCache.clear(); viewRecords(); };
+  $('#rRefresh').onclick = async () => { recsCache.clear(); if (isAll) { try { await loadRecsAll(col, true); } catch (e) { /* 下面重新顯示時會再報錯 */ } } viewRecords(); };
   $('#addR')?.addEventListener('click', () => pickCustomer(c => recordForm(col, c, null, isDemo ? { type: demoType } : {})));
   $('#rhead')?.addEventListener('click', e => {
     const k = e.target.closest('th')?.dataset.k; if (!k) return;
@@ -1050,6 +1081,22 @@ async function viewRecords() {
     const act = e.target.dataset.act; if (!act) return;
     const it = list[Number(e.target.closest('tr').dataset.i)];
     if (act === 'edit') recordForm(col, it.c, it.r);
+    if (act === 'move') pickCustomer(async c2 => {
+      if (c2.id === it.r.customerId) return;
+      if (!confirm(`把這筆${R.title}改連結到「${custNo(c2)} ${c2.name}」？`)) return;
+      try {
+        if (col === 'demos') {
+          await updateDoc(doc(db, 'demos', it.r.id), { customerId: c2.id, customerName: c2.name || '', customerNo: custNo(c2), region: c2.region || '', updatedBy: me.email, updatedAt: serverTimestamp() });
+        } else {
+          const { id, customerId, ...data } = it.r;
+          const b = writeBatch(db);
+          b.set(doc(db, 'customers', c2.id, col, id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+          b.delete(doc(db, 'customers', it.r.customerId, col, id));
+          await b.commit();
+        }
+        toast('已改連結客戶'); recCache.delete(it.r.customerId); recCache.delete(c2.id); recsCache.clear(); viewRecords();
+      } catch (err) { toast(errMsg(err)); }
+    });
     if (act === 'del') {
       if (!confirm(`確定刪除這筆${R.title}？`)) return;
       try { await deleteDoc(doc(recCol(col, it.c), it.r.id)); toast('已刪除'); afterRecordChange(it.c); } catch (err) { toast(errMsg(err)); }
