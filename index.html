@@ -222,7 +222,10 @@ onAuthStateChanged(auth, async u => {
     renderBell();
   }, () => {});
 
-  try { await syncCustomers(); } catch (e) { toast(errMsg(e)); }
+  // 同一台電腦換帳號登入時，不沿用上一位的本機暫存，改向伺服器重抓
+  let switched = false;
+  try { switched = localStorage.getItem('crm_last_user') !== email; localStorage.setItem('crm_last_user', email); } catch (e) { switched = true; }
+  try { await syncCustomers(switched); } catch (e) { toast('客戶資料載入不完整：' + errMsg(e), 10000); }
   route();
   timer = setInterval(() => softRefresh(), 5 * 60 * 1000);
 });
