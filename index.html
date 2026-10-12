@@ -391,6 +391,8 @@ function customerForm(c, preset = {}, onCreated = null) {
     <h1>${isNew ? '新增客戶' : `編輯客戶　${esc(custNo(cur))}`}</h1>
     <div class="grid">
       ${isNew ? '<div class="field"><label>類型 *</label><select name="status"><option value="potential">潛在客戶</option><option value="formal">正式客戶</option></select></div>' : ''}
+      ${!isNew ? `<div class="field"><label>潛在編號</label><input name="leadNo" value="${esc(cur.leadNo)}" placeholder="L-A00001"><button type="button" class="ghost small" data-newno="lead" style="margin-top:6px">取用新的 L 編號</button></div>
+      ${cur.status === 'formal' ? `<div class="field"><label>正式編號 *</label><input name="formalNo" value="${esc(cur.formalNo)}" placeholder="C00001"><button type="button" class="ghost small" data-newno="formal" style="margin-top:6px">取用新的 C 編號</button></div>` : ''}` : ''}
       <div class="field"><label>區域</label><select name="region"><option value="">（未分區）</option>${REGIONS.map(r => `<option ${cur.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
       <div class="field"><label>負責業務</label><select name="salesEmail"><option value="">（未指定）</option>${salesOptions(cur.salesEmail)}</select></div>
       ${COMMON.map(([k, t, r]) => inp(k, t, r)).join('')}
@@ -413,6 +415,22 @@ function customerForm(c, preset = {}, onCreated = null) {
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.querySelector('#cancel').addEventListener('click', close);
   dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelectorAll('[data-newno]').forEach(btn => btn.addEventListener('click', async () => {
+    const kind = btn.dataset.newno;
+    const region = form.region.value;
+    if (kind === 'lead' && !REGION_CODE[region]) return toast('請先選區域，才能產生 L 編號');
+    if (!confirm('會用掉一個新號碼，確定取用？')) return;
+    try {
+      const key = kind === 'formal' ? 'formal' : 'lead_' + REGION_CODE[region];
+      const no = await runTransaction(db, async tx => {
+        const ref = doc(db, 'counters', key); const s0 = await tx.get(ref);
+        const n = s0.exists() ? s0.data().next : 1; tx.set(ref, { next: n + 1 });
+        return kind === 'formal' ? fmt('C', n) : fmt('L-' + REGION_CODE[region], n);
+      });
+      form[kind === 'formal' ? 'formalNo' : 'leadNo'].value = no;
+      toast('已填入 ' + no + '，按儲存後生效');
+    } catch (err) { toast(errMsg(err)); }
+  }));
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -428,6 +446,17 @@ function customerForm(c, preset = {}, onCreated = null) {
     }
     if (!data.name) return toast('請填寫客戶名稱');
     if (isNew && status === 'potential' && !data.region) return toast('潛在客戶必須選擇區域（用來產生 L 編號）');
+    if (!isNew) {
+      const lead = String(fd.get('leadNo') || '').trim().toUpperCase();
+      const formal = String(fd.get('formalNo') ?? cur.formalNo ?? '').trim().toUpperCase();
+      if (lead && !/^L-[ABC]\d{5}$/.test(lead)) return toast('潛在編號格式應為 L-A00001（A 台北、B 台中、C 台南）');
+      if (status === 'potential' && !lead) return toast('潛在客戶必須有潛在編號');
+      if (status === 'formal' && !/^C\d{5}$/.test(formal)) return toast('正式編號格式應為 C00001');
+      const clash = [...customers.values()].find(x => x.id !== cur.id && !x.deleted && ((lead && x.leadNo === lead) || (status === 'formal' && x.formalNo === formal)));
+      if (clash) return toast(`編號已被使用：${custNo(clash)} ${clash.name}`, 6000);
+      data.leadNo = lead;
+      if (status === 'formal') data.formalNo = formal;
+    }
     dlg.querySelector('#save').disabled = true;
     try {
       let id = cur.id;
