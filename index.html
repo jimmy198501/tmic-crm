@@ -54,7 +54,8 @@ tbody.click tr:hover{background:#f3f4fb}
 .tag.formal{background:#e5e8f5;color:var(--navy)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px 20px}
 .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
-.field .val{min-height:22px;word-break:break-all}
+.field .val{min-height:22px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}
+textarea{resize:vertical;line-height:1.5}
 .checks{display:flex;flex-wrap:wrap;gap:16px}
 .checks label{display:flex;align-items:center;gap:6px;font-size:14px}
 .checks input{width:auto}
@@ -190,7 +191,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-12e</div>
+<div class="ver">版本 2026-10-13a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -467,7 +468,7 @@ function viewCustomer(id) {
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
       ${COMMON.slice(1).map(([k, t]) => k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
     </div>
-    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('購買產品', c.purchasedProduct)}${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}</div>` : ''}
+    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
   <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>`;
   app.querySelectorAll('a.navc').forEach(a => a.addEventListener('click', () => window.scrollTo(0, 0)));
@@ -481,7 +482,11 @@ function viewCustomer(id) {
 function customerForm(c, preset = {}, onCreated = null) {
   const isNew = !c;
   const cur = c || { status: 'potential', license: {}, ...preset };
-  const inp = (k, t, req) => `<div class="field"><label>${t}${req ? ' *' : ''}</label><input name="${k}" value="${esc(cur[k])}"></div>`;
+  const MULTI = ['companyProduct', 'address', 'currentSoftware', 'contact', 'phone', 'mobile', 'email', 'purchasedProduct'];
+  const rowsOf = v => Math.min(10, Math.max(2, String(v || '').split('\n').length + Math.floor(String(v || '').length / 40)));
+  const inp = (k, t, req) => MULTI.includes(k)
+    ? `<div class="field ${k === 'purchasedProduct' ? 'full' : ''}"><label>${t}${req ? ' *' : ''}${k === 'purchasedProduct' ? '　<button type="button" class="ghost small" id="autoBreak">依日期自動分行</button>' : ''}</label><textarea name="${k}" rows="${rowsOf(cur[k])}">${esc(cur[k])}</textarea></div>`
+    : `<div class="field"><label>${t}${req ? ' *' : ''}</label><input name="${k}" value="${esc(cur[k])}"></div>`;
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<form id="cf">
     <h1>${isNew ? '新增客戶' : `編輯客戶　${esc(custNo(cur))}`}</h1>
@@ -508,6 +513,13 @@ function customerForm(c, preset = {}, onCreated = null) {
   const togglePart = () => dlg.querySelector('#formalPart').classList.toggle('hidden', statusNow() !== 'formal');
   togglePart();
   if (isNew) form.status.addEventListener('change', togglePart);
+  // 購買產品：在每個日期（如 2021/11/18、2022-08-10）前與「；」後換行
+  dlg.querySelector('#autoBreak')?.addEventListener('click', () => {
+    const ta = form.purchasedProduct;
+    ta.value = ta.value.replace(/\s*[；;]\s*/g, '\n').replace(/(?<![至到～~(（])\s*((?:19|20)\d{2}[\/.-]\d{1,2}[\/.-]\d{1,2})(?![\d)～~-])/g, '\n$1')
+      .split('\n').map(x => x.trim()).filter(Boolean).join('\n');
+    ta.rows = Math.min(12, ta.value.split('\n').length + 1);
+  });
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.querySelector('#cancel').addEventListener('click', close);
   dlg.addEventListener('cancel', () => dlg.remove());
