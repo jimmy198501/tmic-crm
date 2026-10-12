@@ -649,11 +649,17 @@ function recordForm(k, c, r, preset = {}) {
     return `<div class="${cls}">${lab}<input name="${f}" value="${esc(cur[f])}"${f === 'participants' ? ' placeholder="多位用頓號隔開，例：林工程師、王經理"' : ''}></div>`;
   };
   const dlg = document.createElement('dialog');
-  dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted">${esc(custNo(c))}　${esc(c.name)}</p>
+  let target = c; // 管理者可在編輯時更換連結客戶
+  const custLine = () => `<span id="custName">${esc(custNo(target))}　${esc(target.name)}</span>${target.id !== c.id ? ' <span class="tag potential">將更換</span>' : ''}`;
+  dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted" id="custLine">${custLine()}</p>${!isNew && isAdmin() ? '<p><button type="button" class="ghost small" id="chgCust">更換連結客戶</button></p>' : ''}
     <div class="grid">${R.fields.map(field).join('')}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
   document.body.appendChild(dlg);
   const form = dlg.querySelector('#rf');
+  dlg.querySelector('#chgCust')?.addEventListener('click', () => {
+    dlg.close();
+    pickCustomer(c2 => { if (c2) { target = c2; dlg.querySelector('#custLine').innerHTML = custLine(); } dlg.showModal(); }, () => dlg.showModal());
+  });
   const drawFiles = () => { const fl = dlg.querySelector('#flist'); if (fl) fl.innerHTML = files.map((x, i) => `<span><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a><button type="button" class="x" data-i="${i}">✕</button></span>`).join(''); };
   drawFiles();
   dlg.querySelector('#flist')?.addEventListener('click', e => { const i = e.target.dataset.i; if (i !== undefined) { files.splice(Number(i), 1); drawFiles(); } });
@@ -677,14 +683,23 @@ function recordForm(k, c, r, preset = {}) {
         for (const f of picker.files) files.push(await uploadFile(f, R.kind, custNo(c) || c.leadNo || c.id));
       }
       if (R.fields.some(x => x[2] === 'files')) data.files = files;
-      if (R.top) Object.assign(data, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c), region: c.region || '' });
+      if (R.top) Object.assign(data, { customerId: target.id, customerName: target.name || '', customerNo: custNo(target), region: target.region || '' });
       if (k === 'demos' && cur.scheduleId) data.scheduleId = cur.scheduleId;
       if (k === 'demos' && !isAdmin() && !demoTypes().includes(data.type)) throw new Error('你不能填寫這種 Demo 紀錄');
       if (k === 'schedules' && data.endTime && data.endTime < data.startTime) throw new Error('結束時間不能早於開始時間');
       let newId = null;
       if (isNew) newId = (await addDoc(recCol(k, c), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
+      else if (!R.top && target.id !== c.id) {
+        // 子紀錄換客戶：搬到新客戶底下，刪除舊的
+        const { id: _id, customerId: _cid, ...old } = r;
+        const b = writeBatch(db);
+        b.set(doc(recCol(k, target), r.id), { ...old, ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+        b.delete(doc(recCol(k, c), r.id));
+        await b.commit();
+      }
       else await updateDoc(doc(recCol(k, c), r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-      close(); toast('已儲存');
+      close(); toast(target.id !== c.id ? `已儲存，並改連結到 ${target.name}` : '已儲存');
+      if (target.id !== c.id) { recCache.delete(target.id); recsCache.clear(); }
       if (k === 'schedules') { schedCache.clear(); if (isNew) notifySchedule(newId, data); }
       afterRecordChange(c);
     } catch (err) { toast(errMsg(err)); saveBtn.disabled = false; saveBtn.textContent = '儲存'; }
@@ -1104,7 +1119,7 @@ async function viewRecords() {
   });
 }
 
-function pickCustomer(cb) {
+function pickCustomer(cb, onCancel) {
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<h1>選擇客戶</h1><input id="pq" placeholder="輸入名稱、編號、聯絡人搜尋（潛在、正式客戶都可選）"><div class="pick" id="plist"></div>
     <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="pc">取消</button></div>`;
@@ -1118,8 +1133,8 @@ function pickCustomer(cb) {
   };
   draw();
   dlg.querySelector('#pq').addEventListener('input', draw);
-  dlg.querySelector('#pc').onclick = () => { dlg.close(); dlg.remove(); };
-  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#pc').onclick = () => { dlg.close(); dlg.remove(); onCancel?.(); };
+  dlg.addEventListener('cancel', () => { dlg.remove(); onCancel?.(); });
   dlg.querySelector('#plist').addEventListener('click', e => {
     const id = e.target.closest('[data-id]')?.dataset.id; if (!id) return;
     dlg.close(); dlg.remove();
