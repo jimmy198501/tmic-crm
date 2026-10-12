@@ -515,8 +515,8 @@ const REC = {
       ['date', '日期', 'date', true],
       ['salesEmail', '業務', 'user', false, ['sales', 'manager']],
       ['engineerEmail', '工程師', 'user', false, ['engineer']],
-      ['opportunity', '商機', 'list', false, ['中', '暫無需求']],
-      ['period', '期程', 'list', false, ['中期', '長期']],
+      ['opportunity', '商機', 'list', false, ['高', '中', '低', '暫無需求']],
+      ['period', '期程', 'list', false, ['短期', '中期', '長期', '暫無需求']],
       ['participants', '參與人員', 'text'],
       ['products', '介紹產品', 'list', false, ['IronCAD', 'IronCAD Mechanical', 'IronCAD Draft', 'ENCY CAM', 'ENCY Robot', 'DDM (PDM)']],
       ['content', '內容', 'textarea', false, null, true]
@@ -532,7 +532,7 @@ const REC = {
   issues: {
     title: '問題追蹤', kind: 'issue',
     canAdd: () => isAdmin() || isEngineer(), canEdit: () => isAdmin() || isEngineer(), canDel: () => isAdmin(),
-    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['status', '狀態', 'list', false, ['發問中', '處理中', '已解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
+    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['status', '狀態', 'list', false, ['發問中', '未解決', '已解決', '未來新增', '近期觀察', '不解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
     cols: [['date', '日期'], ['title', '名稱'], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
   },
   installs: {
@@ -646,7 +646,7 @@ function recordForm(k, c, r, preset = {}) {
     if (type === 'user') return `<div class="${cls}">${lab}<select name="${f}"><option value="">（未指定）</option>${userOptions(opt, cur[f])}</select></div>`;
     if (type === 'list') return `<div class="${cls}">${lab}<input name="${f}" list="dl_${f}" value="${esc(cur[f])}"><datalist id="dl_${f}">${opt.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>`;
     if (type === 'files') return `<div class="${cls}">${lab}<div class="filelist" id="flist"></div><input type="file" name="__files" multiple accept=".pdf,image/*,.lic,.dat,.txt,.zip"><div class="muted">每個檔案 10MB 以內，存放於 Google Drive</div></div>`;
-    return `<div class="${cls}">${lab}<input name="${f}" value="${esc(cur[f])}"></div>`;
+    return `<div class="${cls}">${lab}<input name="${f}" value="${esc(cur[f])}"${f === 'participants' ? ' placeholder="多位用頓號隔開，例：林工程師、王經理"' : ''}></div>`;
   };
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted">${esc(custNo(c))}　${esc(c.name)}</p>
@@ -1097,10 +1097,23 @@ async function viewImport() {
   });
 }
 const slugEmail = n => 'left-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '@import.tmic';
+async function ensurePeople(list) {
+  const map = {};
+  for (const s of list) {
+    const u = matchSales(s.nameEn);
+    if (u) { map[normName(s.nameEn)] = u.email; continue; }
+    const email = slugEmail(s.nameEn);
+    await setDoc(doc(db, 'users', email), { email, nameZh: s.nameZh || s.nameEn, nameEn: s.nameEn, role: s.role || 'sales', regions: [], region: '', alsoEngineer: false, alsoSales: false, active: false, placeholder: true, updatedBy: me.email, updatedAt: serverTimestamp() }, { merge: true });
+    map[normName(s.nameEn)] = email;
+  }
+  return map;
+}
+const normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function matchSales(nameEn) {
-  return [...users.values()].find(u => (u.nameEn || '').trim().toLowerCase() === nameEn.trim().toLowerCase());
+  return [...users.values()].find(u => normName(u.nameEn) === normName(nameEn));
 }
 function importPreview(data) {
+  if (data.source === 'notion-records') return recordsPreview(data);
   const recs = data.records;
   const formal = recs.filter(r => r.status === 'formal').length;
   const check = recs.filter(r => r.needsCheck).length;
@@ -1123,6 +1136,61 @@ function importPreview(data) {
     <div class="row-actions" style="margin-top:20px"><button id="impGo">開始匯入</button><span class="muted" id="impMsg"></span></div>`;
   $('#impGo').onclick = () => runImport(data, salesRows);
 }
+const REC_LABEL = { demos: 'Demo 紀錄', purchases: '採購紀錄', issues: '問題追蹤', installs: '工程師安裝紀錄' };
+function recordsPreview(data) {
+  const recs = data.records, U = data.unlinked.id;
+  const byCol = {}; recs.forEach(r => { byCol[r.col] = byCol[r.col] || { all: 0, un: 0 }; byCol[r.col].all++; if (r.customerId === U) byCol[r.col].un++; });
+  const missing = recs.filter(r => r.customerId !== U && !customers.has(r.customerId));
+  const people = (data.people || []).map(p => ({ ...p, user: matchSales(p.nameEn) }));
+  $('#impBox').innerHTML = `
+    <h2 style="margin-top:20px">內容檢查（紀錄）</h2>
+    <div class="tablewrap"><table><thead><tr><th>紀錄</th><th>筆數</th><th>放進「未連結客戶」</th></tr></thead><tbody>
+      ${Object.entries(byCol).map(([k, v]) => `<tr><td>${REC_LABEL[k] || k}</td><td>${v.all}</td><td>${v.un}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${missing.length ? `<div class="card warn" style="margin-top:12px">⚠ 有 ${missing.length} 筆紀錄的客戶還不在系統裡。請先完成<strong>客戶匯入</strong>再匯入紀錄。</div>` : ''}
+    <h2 style="margin-top:20px">人員對應</h2>
+    <p class="muted">英文名與「人員管理」相同的自動對應（大小寫、-、_ 不影響）；找不到的建立成「離職」人員。</p>
+    <div class="tablewrap"><table><thead><tr><th>Notion 人員</th><th>出現次數</th><th>對應結果</th></tr></thead><tbody>
+      ${people.map(p => `<tr><td>${esc(p.nameEn)}</td><td>${p.count}</td><td>${p.user ? `✅ ${esc(salesLabel(p.user.email))}` : `建立離職${p.role === 'engineer' ? '工程師' : '業務'}：${esc(p.nameEn)}`}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="row-actions" style="margin-top:20px"><button id="impGo" ${missing.length ? 'disabled' : ''}>開始匯入紀錄</button><span class="muted" id="impMsg"></span></div>`;
+  $('#impGo').onclick = () => runRecordsImport(data);
+}
+async function runRecordsImport(data) {
+  if (!confirm(`確定匯入 ${data.records.length} 筆紀錄？\n\n同一個檔案重複匯入，會覆蓋之前匯入的同一筆紀錄。`)) return;
+  const btn = $('#impGo'), msg = $('#impMsg');
+  btn.disabled = true;
+  try {
+    const map = await ensurePeople(data.people || []);
+    const who = n => (n ? map[normName(n)] : '') || '';
+    const U = data.unlinked;
+    await setDoc(doc(db, 'customers', U.id), { status: 'potential', leadNo: '', formalNo: '', region: '', name: U.name, salesEmail: '', deleted: false, needsCheck: false, source: 'notion', createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() }, { merge: true });
+    if (!customers.has(U.id)) customers.set(U.id, { id: U.id, name: U.name, status: 'potential', region: '' });
+    const recs = data.records;
+    for (let i = 0; i < recs.length; i += 200) {
+      const batch = writeBatch(db);
+      for (const r of recs.slice(i, i + 200)) {
+        const c = customers.get(r.customerId) || {};
+        const { salesName, engineerName, ...rest } = r.data;
+        const base = { ...rest, createdBy: who(r.creator) || me.email, importedCreator: r.creator || '', source: 'notion', createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() };
+        if (r.col === 'demos') {
+          batch.set(doc(db, 'demos', r.id), { ...base, salesEmail: who(salesName) || (rest.type === 'sales' ? (c.salesEmail || '') : ''), engineerEmail: who(engineerName),
+            customerId: r.customerId, customerName: c.name || '', customerNo: custNo(c), region: c.region || '' });
+        } else {
+          batch.set(doc(db, 'customers', r.customerId, r.col, r.id), base);
+        }
+      }
+      await batch.commit();
+      msg.textContent = `已匯入 ${Math.min(i + 200, recs.length)} / ${recs.length} 筆…`;
+    }
+    recCache.clear(); recsCache.clear();
+    await syncCustomers(true);
+    msg.textContent = '';
+    alert(`紀錄匯入完成：${recs.length} 筆。`);
+    location.hash = '#/records';
+  } catch (err) { toast('匯入失敗：' + errMsg(err), 10000); btn.disabled = false; }
+}
+
 async function runImport(data, salesRows) {
   if (!confirm(`確定匯入 ${data.records.length} 筆客戶？\n\n同一個檔案重複匯入，會用檔案內容覆蓋之前匯入的同一筆資料。`)) return;
   const btn = $('#impGo'), msg = $('#impMsg');
