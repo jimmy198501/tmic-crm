@@ -193,7 +193,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13b</div>
+<div class="ver">版本 2026-10-13c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -759,6 +759,20 @@ async function callScript(action, payload) {
   if (!j.ok) throw new Error(j.error || '執行失敗');
   return j;
 }
+// 同步行程到 Google 日曆（CRM → Google 單向）；回傳成功筆數
+async function gcalSync(ids, quiet = false) {
+  let ok = 0;
+  try {
+    const r = await callScript('gcalUpsert', { scheduleIds: ids });
+    for (const [id, ev] of Object.entries(r.events || {})) {
+      if (!ev) continue;
+      if (ev.error) { if (!quiet) toast('Google 日曆同步失敗：' + ev.error, 8000); continue; }
+      ok++;
+      if (ev.created) await updateDoc(doc(db, 'schedules', id), { gcalId: ev.eventId });
+    }
+  } catch (err) { if (!quiet) toast('Google 日曆同步失敗：' + errMsg(err), 8000); else throw err; }
+  return ok;
+}
 // 行程建立後：系統內通知＋Email
 async function notifySchedule(id, data) {
   const to = [...new Set([data.salesEmail, data.engineerEmail].filter(Boolean))];
@@ -1080,7 +1094,10 @@ function scheduleDetail(x) {
     }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
-      try { await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); viewCalendar(); } catch (err) { toast(errMsg(err)); }
+      try {
+        await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); viewCalendar();
+        if (x.gcalId) callScript('gcalDelete', { scheduleId: x.id, eventId: x.gcalId }).catch(err => toast('Google 日曆刪除失敗：' + errMsg(err), 8000));
+      } catch (err) { toast(errMsg(err)); }
     }
   });
   dlg.showModal();
@@ -1166,6 +1183,7 @@ function scheduleForm(r, preset = {}) {
       close(); toast('已儲存'); schedCache.clear();
       if (location.hash.startsWith('#/calendar')) viewCalendar();
       if (isNew) notifySchedule(id, data);
+      gcalSync([id]);
     } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
   dlg.showModal();
@@ -1346,7 +1364,21 @@ async function viewImport() {
   app.innerHTML = `<div class="card"><h1>資料匯入</h1>
     <p>選擇 Claude 產生的 <strong>customers_import.json</strong>，先檢查內容，確認後再匯入。</p>
     <input type="file" id="impFile" accept=".json,application/json" style="max-width:420px">
-    <div id="impBox"></div></div>`;
+    <div id="impBox"></div></div>
+  <div class="card"><h1>Google 日曆</h1>
+    <h2>從 Google 日曆匯入行程</h2>
+    <p class="muted">讀取同步日曆裡的活動，依標題裡的英文名字對應業務／工程師。已經匯入過的會自動略過；重複性活動會匯入，但不會再同步回 Google。</p>
+    <div class="toolbar"><input type="date" id="gFrom" style="max-width:180px"> ～ <input type="date" id="gTo" style="max-width:180px"><button id="gRead">讀取</button></div>
+    <div id="gBox"></div>
+    <h2 style="margin-top:24px">把 CRM 行程補同步到 Google 日曆</h2>
+    <p class="muted">同步功能上線前建立的行程，按這裡補同步（只處理還沒同步過的）。</p>
+    <div class="toolbar">從 <input type="date" id="bFrom" style="max-width:180px"> 之後的行程 <button id="bRun" class="ghost">開始同步</button></div>
+    <div id="bBox"></div>
+  </div>`;
+  const today0 = ymdOf(new Date());
+  $('#gFrom').value = ymdOf(addDays(new Date(), -30)); $('#gTo').value = ymdOf(addDays(new Date(), 180)); $('#bFrom').value = today0;
+  $('#gRead').addEventListener('click', gcalImportRead);
+  $('#bRun').addEventListener('click', gcalBackfill);
   $('#impFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
     let data;
@@ -1354,6 +1386,92 @@ async function viewImport() {
     catch (err) { $('#impBox').innerHTML = `<p style="color:var(--danger)">檔案讀取失敗：${esc(errMsg(err))}</p>`; return; }
     importPreview(data);
   });
+}
+// ---- Google 日曆匯入 ----
+function parseGcalEvent(e) {
+  const title = e.title || '';
+  const found = [];
+  for (const u of users.values()) {
+    if (!u.nameEn || u.active === false) continue;
+    const re = new RegExp('(^|[^A-Za-z])' + u.nameEn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![A-Za-z])', 'i');
+    const m = title.match(re); if (m) found.push([m.index, u]);
+  }
+  found.sort((a, b) => a[0] - b[0]);
+  const isSales = u => ['sales', 'manager'].includes(u.role) || u.alsoSales;
+  const isEng = u => u.role === 'engineer' || u.alsoEngineer;
+  const sales = found.map(x => x[1]).find(isSales);
+  const eng = found.map(x => x[1]).find(u => u !== sales && isEng(u));
+  let type = 'other';
+  if (/休|假/.test(title)) type = 'leave';
+  else if (/上課|課程|教育訓練/.test(title)) type = 'class';
+  else if (/demo/i.test(title)) type = sales ? 'sales' : 'engineer';
+  const regOf = u => u ? (userRegions(u).length === 1 ? userRegions(u)[0] : '') : '';
+  const region = regOf(sales) || regOf(eng) || (['9', '1'].includes(e.color) ? '台北' : '');
+  const content = String(e.content || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+  return { title, type, region, date: e.date, endDate: e.endDate, startTime: e.startTime, endTime: e.endTime, salesEmail: sales?.email || '', engineerEmail: eng?.email || '', place: e.place, url: '', content,
+    gcalId: e.eventId, gcalSkip: !!e.recurring, source: 'gcal' };
+}
+async function gcalImportRead() {
+  const from = $('#gFrom').value, to = $('#gTo').value, box = $('#gBox');
+  if (!from || !to || to < from) return toast('請選擇正確的期間');
+  box.innerHTML = '<p class="muted">讀取中…</p>';
+  let r, existing; const sameKey = new Map(); // 日期|標題 → CRM 裡還沒連結的行程
+  const key = (d, t) => d + '|' + String(t || '').replace(/\s+/g, '').toLowerCase();
+  try {
+    r = await callScript('gcalList', { from, to });
+    existing = new Set((await getDocs(query(collection(db, 'schedules'), where('source', '==', 'gcal')))).docs.map(d => d.id));
+    (await getDocs(query(collection(db, 'schedules'), where('date', '>=', from), where('date', '<=', to)))).docs.forEach(d => {
+      const x = d.data();
+      if (x.gcalId) existing.add('ev:' + x.gcalId); else if (x.source !== 'gcal') sameKey.set(key(x.date, x.title), d.id);
+    });
+  } catch (err) { box.innerHTML = `<p style="color:var(--danger)">讀取失敗：${esc(errMsg(err))}</p>`; return; }
+  const fresh = r.events.filter(e => !existing.has(e.crmId) && !(e.eventId && existing.has('ev:' + e.eventId)));
+  // CRM 已經有同一天、同標題的行程：不重複匯入，改成把兩邊連起來
+  const links = [], rows = [];
+  fresh.forEach(e => { const sid = sameKey.get(key(e.date, e.title)); if (sid) { if (e.eventId) links.push([sid, e.eventId]); sameKey.delete(key(e.date, e.title)); } else rows.push({ id: e.crmId, ...parseGcalEvent(e) }); });
+  const skipped = r.events.length - fresh.length;
+  box.innerHTML = `<p>共讀到 ${r.events.length} 筆，<strong>新的 ${rows.length} 筆</strong>${skipped ? `，已匯入過略過 ${skipped} 筆` : ''}${links.length ? `，CRM 已有同日同標題的 ${links.length} 筆（不重複匯入，只把兩邊連結）` : ''}。</p>
+    ${rows.length || links.length ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>標題</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>重複</th></tr></thead><tbody>
+    ${rows.map(x => `<tr><td>${esc(dateRangeText(x))}</td><td>${esc(timeText(x))}</td><td>${esc(x.title)}</td><td>${SCHED_TYPE[x.type]}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${x.gcalSkip ? '是' : ''}</td></tr>`).join('')}
+    </tbody></table></div><div class="toolbar" style="margin-top:12px"><span class="spacer"></span><button id="gGo">確認匯入 ${rows.length} 筆${links.length ? `＋連結 ${links.length} 筆` : ''}</button></div>` : ''}`;
+  $('#gGo')?.addEventListener('click', async () => {
+    if (!confirm(`確定匯入 ${rows.length} 筆行程${links.length ? `，並連結 ${links.length} 筆` : ''}？\n匯入不會寄通知信；之後在 CRM 修改，會同步更新 Google 日曆上的同一筆活動。`)) return;
+    $('#gGo').disabled = true;
+    try {
+      for (let i = 0; i < rows.length; i += 200) {
+        const b = writeBatch(db);
+        rows.slice(i, i + 200).forEach(({ id, ...x }) => b.set(doc(db, 'schedules', id), { ...x, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() }));
+        await b.commit();
+      }
+      for (let i = 0; i < links.length; i += 200) {
+        const b = writeBatch(db);
+        links.slice(i, i + 200).forEach(([sid, ev]) => b.update(doc(db, 'schedules', sid), { gcalId: ev }));
+        await b.commit();
+      }
+      // 連結後由 CRM 內容更新那筆 Google 活動（之後在 CRM 刪除才刪得到）
+      for (let i = 0; i < links.length; i += 20) await gcalSync(links.slice(i, i + 20).map(x => x[0]), true).catch(() => 0);
+      schedCache.clear();
+      box.innerHTML = `<p>✅ 已匯入 ${rows.length} 筆${links.length ? `、連結 ${links.length} 筆` : ''}，可到「行事曆」查看。標題裡沒對到人的行程，請到行事曆手動補上業務／工程師。</p>`;
+    } catch (err) { toast(errMsg(err)); $('#gGo').disabled = false; }
+  });
+}
+async function gcalBackfill() {
+  const from = $('#bFrom').value, box = $('#bBox');
+  if (!from) return toast('請選擇日期');
+  box.innerHTML = '<p class="muted">檢查中…</p>';
+  let ids;
+  try { ids = (await getDocs(query(collection(db, 'schedules'), where('date', '>=', from)))).docs.filter(d => !d.data().gcalId && !d.data().gcalSkip).map(d => d.id); }
+  catch (err) { box.innerHTML = `<p style="color:var(--danger)">${esc(errMsg(err))}</p>`; return; }
+  if (!ids.length) { box.innerHTML = '<p>沒有需要補同步的行程。</p>'; return; }
+  if (!confirm(`有 ${ids.length} 筆行程還沒同步到 Google 日曆，開始同步？`)) { box.innerHTML = ''; return; }
+  let done = 0;
+  try {
+    for (let i = 0; i < ids.length; i += 20) {
+      done += await gcalSync(ids.slice(i, i + 20), true);
+      box.innerHTML = `<p class="muted">同步中… ${Math.min(i + 20, ids.length)} / ${ids.length}</p>`;
+    }
+    box.innerHTML = `<p>✅ 已同步 ${done} 筆${done < ids.length ? `（${ids.length - done} 筆失敗，可再按一次重試）` : ''}。</p>`;
+  } catch (err) { box.innerHTML = `<p style="color:var(--danger)">同步中斷：${esc(errMsg(err))}（已完成 ${done} 筆，可再按一次繼續）</p>`; }
 }
 const slugEmail = n => 'left-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '@import.tmic';
 async function ensurePeople(list) {
