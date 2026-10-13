@@ -124,6 +124,8 @@ tr.left td{color:#9aa}
 .navc{border:1px solid var(--navy);border-radius:8px;padding:5px 12px;text-decoration:none;font-size:14px;font-weight:500;white-space:nowrap}
 .navc:hover{background:#f3f4fb}
 .navc.off{border-color:var(--line);color:#aab}
+select.fon{border-color:var(--purple);color:var(--purple);font-weight:500}
+.mother{width:auto;flex:1 1 200px}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .plain::before{display:none}
@@ -198,7 +200,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13h</div>
+<div class="ver">版本 2026-10-13j</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -705,6 +707,10 @@ const demoTypes = () => isAdmin() ? ['sales', 'engineer']
   : [...((me.role === 'sales' || me.role === 'manager') ? ['sales'] : []), ...((me.role === 'engineer' || me.alsoEngineer) ? ['engineer'] : [])];
 
 const PLACES = ['客戶現場', '線上會議', '公司'];
+// 介紹產品（可複選，存成「A, B」）；舊資料的別名統一成正式名稱
+const PRODUCT_OPTS = ['IronCAD', 'IronCAD Mechanical', 'IronCAD Draft', 'ENCY CAM', 'ENCY Robot', 'DDM (PDM)'];
+const PROD_ALIAS = { ironcad: 'IronCAD', 'ironcad mechanical': 'IronCAD Mechanical', draft: 'IronCAD Draft', 'ironcad draft': 'IronCAD Draft', 'ency cam': 'ENCY CAM', 'ency robot': 'ENCY Robot', ency: 'ENCY', ddm: 'DDM (PDM)', 'ddm (pdm)': 'DDM (PDM)', keyshot: 'KeyShot' };
+const prodTokens = v => [...new Set(String(v || '').split(/[,，、;；\/]+/).map(x => x.trim()).filter(Boolean).map(x => PROD_ALIAS[x.toLowerCase()] || x))];
 const REC = {
   demos: {
     title: 'Demo 紀錄', top: true,
@@ -719,7 +725,7 @@ const REC = {
       ['opportunity', '商機', 'list', false, ['高', '中', '低', '暫無需求']],
       ['period', '期程', 'list', false, ['短期', '中期', '長期', '暫無需求']],
       ['participants', '參與人員', 'text'],
-      ['products', '介紹產品', 'list', false, ['IronCAD', 'IronCAD Mechanical', 'IronCAD Draft', 'ENCY CAM', 'ENCY Robot', 'DDM (PDM)']],
+      ['products', '介紹產品', 'multi', false, PRODUCT_OPTS],
       ['content', '內容', 'textarea', false, null, true]
     ],
     cols: [['date', '日期'], ['type', '類型', r => DEMO_TYPE[r.type] || ''], ['salesEmail', '業務', r => salesLabel(r.salesEmail)], ['engineerEmail', '工程師', r => salesLabel(r.engineerEmail)], ['opportunity', '商機'], ['period', '期程'], ['products', '介紹產品'], ['content', '內容', null, true]]
@@ -879,6 +885,11 @@ function recordForm(k, c, r, preset = {}) {
     if (type === 'select') return `<div class="${cls}">${lab}<select name="${f}">${opt().map(([v, tt]) => `<option value="${v}" ${cur[f] === v ? 'selected' : ''}>${tt}</option>`).join('')}</select></div>`;
     if (type === 'user') return `<div class="${cls}">${lab}<select name="${f}"><option value="">（未指定）</option>${userOptions(opt, cur[f])}</select></div>`;
     if (type === 'list') return `<div class="${cls}">${lab}<input name="${f}" list="dl_${f}" value="${esc(cur[f])}"><datalist id="dl_${f}">${opt.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>`;
+    if (type === 'multi') {
+      const have = prodTokens(cur[f]);
+      const all = [...opt, ...have.filter(x => !opt.includes(x))];
+      return `<div class="${cls} full">${lab}<input type="hidden" name="${f}" value="${esc(have.join(', '))}"><div class="checks mchk" data-for="${f}">${all.map(o => `<label><input type="checkbox" value="${esc(o)}" ${have.includes(o) ? 'checked' : ''}>${esc(o)}</label>`).join('')}<input class="mother" placeholder="其他（自行輸入，多個用逗號隔開）" style="max-width:280px"></div></div>`;
+    }
     if (type === 'files') return `<div class="${cls}">${lab}<div class="filelist" id="flist"></div><input type="file" name="__files" multiple accept=".pdf,image/*,.lic,.dat,.txt,.zip"><div class="muted">每個檔案 10MB 以內，存放於 Google Drive</div></div>`;
     return `<div class="${cls}">${lab}<input name="${f}" value="${esc(cur[f])}"${f === 'participants' ? ' placeholder="多位用頓號隔開，例：林工程師、王經理"' : ''}></div>`;
   };
@@ -893,6 +904,11 @@ function recordForm(k, c, r, preset = {}) {
   dlg.querySelector('#chgCust')?.addEventListener('click', () => {
     dlg.close();
     pickCustomer(c2 => { if (c2) { target = c2; dlg.querySelector('#custLine').innerHTML = custLine(); } dlg.showModal(); }, () => dlg.showModal());
+  });
+  // 複選欄位：勾選或輸入「其他」時，更新要儲存的值
+  dlg.querySelectorAll('.mchk').forEach(box => {
+    const upd = () => { const v = [...box.querySelectorAll('input[type=checkbox]:checked')].map(i => i.value).concat(prodTokens(box.querySelector('.mother').value)); form[box.dataset.for].value = [...new Set(v)].join(', '); };
+    box.addEventListener('change', upd); box.querySelector('.mother').addEventListener('input', upd);
   });
   const drawFiles = () => { const fl = dlg.querySelector('#flist'); if (fl) fl.innerHTML = files.map((x, i) => `<span><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a><button type="button" class="x" data-i="${i}">✕</button></span>`).join(''); };
   drawFiles();
@@ -1327,7 +1343,7 @@ const RTABS = [
   ['installs', '工程師安裝紀錄', 'installs']
 ];
 const seesAllRecs = () => isAdmin() || isEngineer();
-const recsUI = { unlinked: false, tab: 'sdemo', ym: new Date().toLocaleDateString('sv-SE').slice(0, 7), region: '', sales: '', engineer: '', q: '', sort: 'date', dir: -1 };
+const recsUI = { unlinked: false, tab: 'sdemo', ym: new Date().toLocaleDateString('sv-SE').slice(0, 7), region: '', sales: '', engineer: '', q: '', sort: 'date', dir: -1, opp: '', period: '', prod: '' };
 const recsCache = new Map(); // `${collection}|${ym}` -> rows
 
 const UNLINKED_ID = 'imp_unlinked';
@@ -1387,14 +1403,24 @@ async function viewRecords() {
   if (!location.hash.startsWith('#/records')) return;
   const q = recsUI.q.trim().toLowerCase();
   const typed = rows.filter(r => !demoType || r.type === demoType);
+  const isDemoTab = col === 'demos';
+  const prodOpts = [...PRODUCT_OPTS, ...[...new Set(typed.flatMap(r => prodTokens(r.products)))].filter(x => !PRODUCT_OPTS.includes(x)).sort()];
   const unlinkedN = typed.filter(r => r.customerId === UNLINKED_ID).length;
   const list = typed.filter(r => !recsUI.unlinked || r.customerId === UNLINKED_ID).map(r => ({ r, c: recCustomer(r) }))
     .filter(({ r, c }) => !recsUI.region || (c.region || r.region) === recsUI.region)
     .filter(({ r, c }) => !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
     .filter(({ r }) => !recsUI.engineer || r.engineerEmail === recsUI.engineer)
+    .filter(({ r }) => !isDemoTab || !recsUI.opp || (recsUI.opp === '__none' ? !r.opportunity : r.opportunity === recsUI.opp))
+    .filter(({ r }) => !isDemoTab || !recsUI.period || (recsUI.period === '__none' ? !r.period : r.period === recsUI.period))
+    .filter(({ r }) => !isDemoTab || !recsUI.prod || (recsUI.prod === '__none' ? !prodTokens(r.products).length : prodTokens(r.products).includes(recsUI.prod)))
     .filter(({ r, c }) => !q || [c.name, custNo(c), ...R.cols.map(([f]) => r[f])].some(v => String(v || '').toLowerCase().includes(q)));
   const val = ({ r, c }, k) => k === 'customer' ? (c.name || '') : k === 'createdBy' ? salesLabel(r.createdBy) : String((R.cols.find(x => x[0] === k)?.[2] || (x => x[k]))(r) ?? '');
-  list.sort((a, b) => val(a, recsUI.sort).localeCompare(val(b, recsUI.sort), 'zh-Hant', { numeric: true }) * recsUI.dir);
+  // 有固定選項的欄位（商機：高→中→低→暫無需求；期程：短期→中期→長期→暫無需求）照選項順序排，空白一律排最後；同級再依日期新到舊
+  const opts = R.fields.find(x => x[0] === recsUI.sort && x[2] === 'list')?.[4];
+  if (opts) {
+    const rank = it => { const i = opts.indexOf(it.r[recsUI.sort]); return i < 0 ? null : i; };
+    list.sort((a, b) => { const x = rank(a), y = rank(b); if (x === null || y === null) return (x === null) - (y === null); return (x - y) * recsUI.dir || String(b.r.date || '').localeCompare(String(a.r.date || '')); });
+  } else list.sort((a, b) => val(a, recsUI.sort).localeCompare(val(b, recsUI.sort), 'zh-Hant', { numeric: true }) * recsUI.dir);
   const cols = [R.cols[0], ['customer', '客戶'], ...R.cols.slice(1).filter(([f]) => f !== 'type')];
   const cell = ({ r, c }, [f, , fn, wrap]) => {
     if (f === 'customer') return `<td class="cust">${customers.has(r.customerId) ? `<a href="#/customer/${encodeURIComponent(r.customerId)}">${esc(custNo(c))} ${esc(c.name)}</a>` : `${esc(custNo(c))} ${esc(c.name)}`}</td>`;
@@ -1421,7 +1447,11 @@ async function viewRecords() {
       <input id="rQ" placeholder="搜尋客戶、內容" value="${esc(recsUI.q)}" style="max-width:200px">
       <button class="ghost small" id="rRefresh">重新整理</button>
     </div>
-    <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆</div>
+    ${isDemoTab ? (() => {
+      const fsel = (id, k, ph, opts) => `<select id="${id}" class="${recsUI[k] ? 'fon' : ''}"><option value="">${ph}</option>${opts.map(o => `<option value="${esc(o)}" ${recsUI[k] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}<option value="__none" ${recsUI[k] === '__none' ? 'selected' : ''}>（未填）</option></select>`;
+      return `<div class="toolbar">${fsel('fOpp', 'opp', '全部商機', ['高', '中', '低', '暫無需求'])}${fsel('fPer', 'period', '全部期程', ['短期', '中期', '長期', '暫無需求'])}${fsel('fProd', 'prod', '全部介紹產品', prodOpts)}${recsUI.opp || recsUI.period || recsUI.prod ? '<button class="ghost small" id="fClr">清除篩選</button>' : ''}</div>`;
+    })() : ''}
+    <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆${isDemoTab && (recsUI.opp || recsUI.period || recsUI.prod) ? `（已篩選：${[['商機', recsUI.opp], ['期程', recsUI.period], ['介紹產品', recsUI.prod]].filter(x => x[1]).map(([t, v]) => `${t}＝${v === '__none' ? '未填' : esc(v)}`).join('、')}）` : ''}</div>
     ${list.length ? `<div class="tablewrap"><table><thead><tr id="rhead">${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th><th></th></tr></thead>
     <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}">${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td>
       <td class="row-actions">${isAdmin() ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
@@ -1437,6 +1467,12 @@ async function viewRecords() {
   $('#rSales').onchange = e => { recsUI.sales = e.target.value; viewRecords(); };
   if ($('#rEng')) $('#rEng').onchange = e => { recsUI.engineer = e.target.value; viewRecords(); };
   $('#rQ').onchange = e => { recsUI.q = e.target.value; viewRecords(); };
+  if ($('#fOpp')) {
+    $('#fOpp').onchange = e => { recsUI.opp = e.target.value; viewRecords(); };
+    $('#fPer').onchange = e => { recsUI.period = e.target.value; viewRecords(); };
+    $('#fProd').onchange = e => { recsUI.prod = e.target.value; viewRecords(); };
+    $('#fClr')?.addEventListener('click', () => { recsUI.opp = recsUI.period = recsUI.prod = ''; viewRecords(); });
+  }
   $('#rRefresh').onclick = async () => { recsCache.clear(); if (isAll) { try { await loadRecsAll(col, true); } catch (e) { /* 下面重新顯示時會再報錯 */ } } viewRecords(); };
   $('#addR')?.addEventListener('click', () => pickCustomer(c => recordForm(col, c, null, isDemo ? { type: demoType } : {})));
   $('#rhead')?.addEventListener('click', e => {
