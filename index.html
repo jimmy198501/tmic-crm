@@ -12,7 +12,7 @@
 body{margin:0;font-family:'Noto Sans TC',system-ui,sans-serif;color:var(--ink);background:var(--bg);font-size:15px}
 a{color:var(--navy)}
 header{background:#fff;border-bottom:3px solid var(--navy);position:sticky;top:0;z-index:10}
-.hin{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:20px;padding:0 24px;min-height:60px}
+.hin{max-width:1880px;margin:0 auto;display:flex;align-items:center;gap:20px;padding:0 24px;min-height:60px}
 .brand{display:flex;align-items:baseline;gap:6px;font-weight:700;color:var(--navy);font-size:24px;letter-spacing:.5px;white-space:nowrap;flex:none}
 .brand .dot{color:var(--purple)}
 .brand small{font-size:13px;color:var(--purple);font-weight:500;letter-spacing:1px}
@@ -22,7 +22,7 @@ nav a{padding:8px 14px;border-radius:8px;color:var(--muted);text-decoration:none
 nav a.active{background:var(--navy);color:#fff}
 .me{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px;flex:none;white-space:nowrap}
 #meName{overflow:hidden;text-overflow:ellipsis}
-main{max-width:1200px;margin:0 auto;padding:24px}
+main{max-width:1880px;margin:0 auto;padding:24px 32px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
 h1{font-size:20px;color:var(--navy);margin:0 0 16px}
 h2{font-size:16px;color:var(--navy);margin:0 0 12px;padding-left:10px;border-left:4px solid var(--purple)}
@@ -131,7 +131,12 @@ tr.left td{color:#9aa}
 .pick div{padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
 .pick div:hover{background:#f3f4fb}
 @media (max-width:640px){.cal .dc{min-height:64px}.ev{font-size:10px;padding:1px 3px}.panel{position:fixed;left:8px;right:8px;top:96px;width:auto}}
-td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
+td.wrap{white-space:pre-wrap;min-width:300px}
+td.cust{white-space:normal;min-width:160px;max-width:280px}
+th{position:relative}
+.colrs{position:absolute;top:0;right:-4px;bottom:0;width:9px;cursor:col-resize;z-index:2}
+.colrs:hover,.colrs.on{background:linear-gradient(to right,transparent 3px,var(--purple) 3px,var(--purple) 5px,transparent 5px)}
+body.resizing{cursor:col-resize;user-select:none}
 .files a{display:block;font-size:13px}
 .filelist{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
 .filelist span{display:flex;gap:8px;align-items:center;font-size:13px}
@@ -193,7 +198,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13g</div>
+<div class="ver">版本 2026-10-13h</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -255,8 +260,45 @@ function labelTables() {
     t.querySelectorAll('tbody tr').forEach(tr => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('data-label')) td.setAttribute('data-label', heads[i] || ''); }));
   });
 }
+// 電腦版：表格欄位可拖拉標題右緣調整寬度（雙擊恢復），寬度記在這台電腦的瀏覽器
+const wideScreen = () => window.matchMedia('(min-width:641px)').matches;
+const colKey = t => 'colw:' + [...t.querySelectorAll('thead th')].map(th => th.textContent.replace(/[▲▼]/g, '').trim()).join('|');
+const loadW = k => { try { return JSON.parse(localStorage.getItem(k) || '{}'); } catch (e) { return {}; } };
+const saveW = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 無法記住也沒關係 */ } };
+function setColW(t, i, w) {
+  const ths = t.querySelectorAll('thead th'); if (!ths[i]) return;
+  const css = w ? w + 'px' : '';
+  ths[i].style.width = ths[i].style.minWidth = ths[i].style.maxWidth = css;
+  t.querySelectorAll('tbody tr').forEach(tr => { const td = tr.children[i]; if (td) { td.style.width = td.style.minWidth = td.style.maxWidth = css; td.style.whiteSpace = w ? 'normal' : ''; } });
+}
+function enhanceTables() {
+  if (!wideScreen()) return;
+  document.querySelectorAll('.tablewrap table').forEach(t => {
+    const k = colKey(t), saved = loadW(k), ths = [...t.querySelectorAll('thead th')];
+    ths.forEach((th, i) => {
+      if (saved[i] && th.dataset.w !== String(saved[i])) { th.dataset.w = saved[i]; }
+      if (th.querySelector('.colrs') || i === ths.length - 1 || !th.textContent.trim()) return;
+      const h = document.createElement('span'); h.className = 'colrs'; h.title = '拖拉調整欄寬，雙擊恢復';
+      h.addEventListener('click', e => e.stopPropagation());
+      h.addEventListener('dblclick', e => { e.stopPropagation(); const v = loadW(k); delete v[i]; saveW(k, v); delete th.dataset.w; setColW(t, i, 0); });
+      h.addEventListener('mousedown', e => {
+        e.preventDefault(); e.stopPropagation();
+        const x0 = e.clientX, w0 = th.offsetWidth; h.classList.add('on'); document.body.classList.add('resizing');
+        const mv = ev => setColW(t, i, Math.max(50, Math.round(w0 + ev.clientX - x0)));
+        const up = () => {
+          document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
+          h.classList.remove('on'); document.body.classList.remove('resizing');
+          const v = loadW(k); v[i] = th.offsetWidth; saveW(k, v); th.dataset.w = v[i];
+        };
+        document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+      });
+      th.appendChild(h);
+    });
+    Object.entries(saved).forEach(([i, w]) => setColW(t, Number(i), w));
+  });
+}
 let labelPending = false;
-new MutationObserver(() => { if (!labelPending) { labelPending = true; requestAnimationFrame(() => { labelPending = false; labelTables(); }); } }).observe(document.body, { childList: true, subtree: true });
+new MutationObserver(() => { if (!labelPending) { labelPending = true; requestAnimationFrame(() => { labelPending = false; labelTables(); enhanceTables(); }); } }).observe(document.body, { childList: true, subtree: true });
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isAdmin = () => me?.role === 'admin';
 const userRegions = u => Array.isArray(u?.regions) ? u.regions : (u?.region ? [u.region] : []);
@@ -1355,7 +1397,7 @@ async function viewRecords() {
   list.sort((a, b) => val(a, recsUI.sort).localeCompare(val(b, recsUI.sort), 'zh-Hant', { numeric: true }) * recsUI.dir);
   const cols = [R.cols[0], ['customer', '客戶'], ...R.cols.slice(1).filter(([f]) => f !== 'type')];
   const cell = ({ r, c }, [f, , fn, wrap]) => {
-    if (f === 'customer') return `<td>${customers.has(r.customerId) ? `<a href="#/customer/${encodeURIComponent(r.customerId)}">${esc(custNo(c))} ${esc(c.name)}</a>` : `${esc(custNo(c))} ${esc(c.name)}`}</td>`;
+    if (f === 'customer') return `<td class="cust">${customers.has(r.customerId) ? `<a href="#/customer/${encodeURIComponent(r.customerId)}">${esc(custNo(c))} ${esc(c.name)}</a>` : `${esc(custNo(c))} ${esc(c.name)}`}</td>`;
     if (f === 'files') return `<td class="files">${(r.files || []).map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>`).join('') || '—'}</td>`;
     if (f === 'link' && r.link) return `<td><a href="${esc(r.link)}" target="_blank" rel="noopener">開啟</a></td>`;
     const v = fn ? fn(r) : r[f];
