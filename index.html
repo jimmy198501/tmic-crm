@@ -193,7 +193,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13d</div>
+<div class="ver">版本 2026-10-13e</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -328,7 +328,7 @@ onAuthStateChanged(auth, async u => {
   try { switched = localStorage.getItem('crm_last_user') !== email; localStorage.setItem('crm_last_user', email); } catch (e) { switched = true; }
   try { await syncCustomers(switched); } catch (e) { toast('客戶資料載入不完整：' + errMsg(e), 10000); }
   route();
-  timer = setInterval(() => softRefresh(), 5 * 60 * 1000);
+  timer = setInterval(() => { if (document.visibilityState === "visible") softRefresh(); }, 5 * 60 * 1000); // 視窗沒在看時不更新，省讀取次數
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -1063,7 +1063,20 @@ function weekGrid(start, end, list, hol, today, chip) {
 // 行事曆搜尋：不分月份，找全部行程
 async function viewCalSearch() {
   app.innerHTML = '<div class="card"><h1>行事曆</h1><p class="muted">搜尋中…</p></div>';
-  try { if (!allSchedCache) allSchedCache = (await getDocs(collection(db, 'schedules'))).docs.map(d => ({ id: d.id, ...d.data() })); }
+  try {
+    if (!allSchedCache) {
+      const base = collection(db, 'schedules'), map = new Map(); let max = null;
+      try {
+        (await getDocsFromCache(base)).docs.forEach(d => {
+          map.set(d.id, { id: d.id, ...d.data() });
+          const u = d.data().updatedAt;
+          if (!d.metadata.hasPendingWrites && u && (!max || u.toMillis() > max.toMillis())) max = u;
+        });
+      } catch (e) { /* 沒有快取就全部抓 */ }
+      (await getDocs(max ? query(base, where('updatedAt', '>', max)) : base)).docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+      allSchedCache = [...map.values()];
+    }
+  }
   catch (e) { app.innerHTML = `<div class="card"><p>搜尋失敗：${esc(errMsg(e))}</p></div>`; return; }
   if (!location.hash.startsWith('#/calendar')) return;
   const words = cal.q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -1095,7 +1108,11 @@ async function viewCalSearch() {
   $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
   app.querySelector('tbody')?.addEventListener('click', e => {
     const sid = e.target.closest('[data-sid]')?.dataset.sid; const x = list.find(y => y.id === sid);
-    if (x) scheduleDetail(x);
+    if (!x) return;
+    getDoc(doc(db, 'schedules', sid)).then(snap => {
+      if (!snap.exists()) { toast('這個行程已被刪除'); allSchedCache = allSchedCache?.filter(y => y.id !== sid) || null; viewCalendar(); }
+      else scheduleDetail({ id: sid, ...snap.data() });
+    }).catch(err => toast(errMsg(err)));
   });
 }
 
@@ -1462,9 +1479,9 @@ async function gcalImportRead() {
   const key = (d, t) => d + '|' + String(t || '').replace(/\s+/g, '').toLowerCase();
   try {
     r = await callScript('gcalList', { from, to });
-    existing = new Set((await getDocs(query(collection(db, 'schedules'), where('source', '==', 'gcal')))).docs.map(d => d.id));
-    (await getDocs(query(collection(db, 'schedules'), where('date', '>=', from), where('date', '<=', to)))).docs.forEach(d => {
-      const x = d.data();
+    existing = new Set();
+    (await getDocs(query(collection(db, 'schedules'), where('date', '>=', ymdOf(addDays(toDate(from), -62))), where('date', '<=', to)))).docs.forEach(d => {
+      const x = d.data(); existing.add(d.id);
       if (x.gcalId) existing.add('ev:' + x.gcalId); else if (x.source !== 'gcal') sameKey.set(key(x.date, x.title), d.id);
     });
   } catch (err) { box.innerHTML = `<p style="color:var(--danger)">讀取失敗：${esc(errMsg(err))}</p>`; return; }
