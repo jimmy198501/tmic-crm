@@ -216,7 +216,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13k</div>
+<div class="ver">版本 2026-10-13l</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1043,7 +1043,10 @@ const SCHED_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo', class: '�
 const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '', weekStart: 0 };
 let privCache = null; // 我的私人行程
 async function loadPrivate() {
-  if (!privCache) privCache = (await getDocs(query(collection(db, 'privateSchedules'), where('owner', '==', me.email)))).docs.map(d => ({ id: d.id, ...d.data(), _private: true }));
+  if (!privCache) {
+    try { privCache = (await getDocs(query(collection(db, 'privateSchedules'), where('owner', '==', me.email)))).docs.map(d => ({ id: d.id, ...d.data(), _private: true })); }
+    catch (e) { if (!loadPrivate.warned) { loadPrivate.warned = true; toast('私人行程讀取失敗（請確認 Firestore 規則已發布新版）：' + errMsg(e), 10000); } return []; }
+  }
   return privCache;
 }
 const wdOrder = () => cal.weekStart === 1 ? [...WD.slice(1), WD[0]] : WD;
