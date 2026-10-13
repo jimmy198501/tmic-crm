@@ -193,7 +193,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13c</div>
+<div class="ver">版本 2026-10-13d</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -739,7 +739,7 @@ async function showRecords(c, reload = false) {
     if (act === 'edit' && r) recordForm(k, c, r);
     if (act === 'del' && r) {
       if (!confirm(`確定刪除這筆${REC[k].title}？`)) return;
-      try { await deleteDoc(doc(recCol(k, c), r.id)); toast('已刪除'); if (k === 'schedules') schedCache.clear(); afterRecordChange(c); } catch (err) { toast(errMsg(err)); }
+      try { await deleteDoc(doc(recCol(k, c), r.id)); toast('已刪除'); if (k === 'schedules') schedCache.clear(); allSchedCache = null; afterRecordChange(c); } catch (err) { toast(errMsg(err)); }
     }
   }));
 }
@@ -865,7 +865,7 @@ function recordForm(k, c, r, preset = {}) {
       else await updateDoc(doc(recCol(k, c), r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
       close(); toast(target.id !== c.id ? `已儲存，並改連結到 ${target.name}` : '已儲存');
       if (target.id !== c.id) { recCache.delete(target.id); recsCache.clear(); }
-      if (k === 'schedules') { schedCache.clear(); if (isNew) notifySchedule(newId, data); }
+      if (k === 'schedules') { schedCache.clear(); allSchedCache = null; if (isNew) notifySchedule(newId, data); }
       afterRecordChange(c);
     } catch (err) { toast(errMsg(err)); saveBtn.disabled = false; saveBtn.textContent = '儲存'; }
   });
@@ -898,7 +898,8 @@ $('#npanel').addEventListener('click', async e => {
 
 // ---------------- 行事曆 ----------------
 const SCHED_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo', class: '上課', leave: '休假', other: '其他' };
-const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '' };
+const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '' };
+let allSchedCache = null; // 搜尋用：全部行程
 const schedCache = new Map(); // 'YYYY-MM' -> [schedules]
 const holidayCache = new Map(); // 'YYYY' -> Map(date -> name)
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -944,6 +945,7 @@ function calRange() {
   return [addDays(first, -first.getDay()), addDays(last, 6 - last.getDay())];
 }
 async function viewCalendar() {
+  if (cal.q) return viewCalSearch();
   const [start, end] = calRange();
   const s0 = ymdOf(start), s1 = ymdOf(end);
   const months = []; // 多抓前一個月，才看得到跨月的行程
@@ -991,6 +993,7 @@ async function viewCalendar() {
       <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <button class="ghost small" id="cRefresh">重新整理</button>
     </div>
+    <div class="toolbar"><input id="cQ" placeholder="🔍 搜尋全部行程：標題、內容、地點、人員" style="max-width:360px"></div>
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆行程</div>
     ${body}
     <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span>' : ''}</div>
@@ -1002,7 +1005,8 @@ async function viewCalendar() {
   $('#cRegion').onchange = e => { cal.region = e.target.value; viewCalendar(); };
   $('#cPerson').onchange = e => { cal.person = e.target.value; viewCalendar(); };
   $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
-  $('#cRefresh').onclick = () => { schedCache.clear(); viewCalendar(); };
+  $('#cRefresh').onclick = () => { schedCache.clear(); allSchedCache = null; allSchedCache = null; viewCalendar(); };
+  $('#cQ').onkeydown = e => { if (e.key === 'Enter' && e.target.value.trim()) { cal.q = e.target.value.trim(); viewCalendar(); } };
   $('#addS').onclick = () => scheduleForm(null, { date: cal.cursor });
   app.querySelector('.card').addEventListener('click', e => {
     const sid = e.target.closest('[data-sid]')?.dataset.sid;
@@ -1056,6 +1060,45 @@ function weekGrid(start, end, list, hol, today, chip) {
   </div></div>`;
 }
 
+// 行事曆搜尋：不分月份，找全部行程
+async function viewCalSearch() {
+  app.innerHTML = '<div class="card"><h1>行事曆</h1><p class="muted">搜尋中…</p></div>';
+  try { if (!allSchedCache) allSchedCache = (await getDocs(collection(db, 'schedules'))).docs.map(d => ({ id: d.id, ...d.data() })); }
+  catch (e) { app.innerHTML = `<div class="card"><p>搜尋失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!location.hash.startsWith('#/calendar')) return;
+  const words = cal.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const text = x => [x.title, x.content, x.place, x.url, x.region, SCHED_TYPE[x.type], salesLabel(x.salesEmail), salesLabel(x.engineerEmail), x.date].join(' ').toLowerCase();
+  const list = allSchedCache.filter(x => words.every(w => text(x).includes(w)))
+    .filter(x => !cal.region || x.region === cal.region)
+    .filter(x => !cal.person || x.salesEmail === cal.person || x.engineerEmail === cal.person)
+    .filter(x => !cal.type || x.type === cal.type)
+    .sort((a, b) => (b.date + (b.startTime || '')).localeCompare(a.date + (a.startTime || '')));
+  const today = ymdOf(new Date());
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><h1 style="margin:0">行事曆搜尋</h1><span class="spacer"></span><button class="ghost" id="qBack">← 回行事曆</button></div>
+    <div class="toolbar"><input id="cQ" value="${esc(cal.q)}" placeholder="🔍 搜尋全部行程" style="max-width:360px"><button id="qGo">搜尋</button>
+      <span class="spacer"></span>
+      <select id="cRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${cal.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
+      <select id="cPerson"><option value="">全部人員</option>${userOptions(['sales', 'manager', 'engineer', 'admin'], cal.person)}</select>
+      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    </div>
+    <div class="muted" style="margin-bottom:8px">找到 ${list.length} 筆（新到舊）。多個關鍵字用空白隔開＝全部都要符合</div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>標題</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>地點</th></tr></thead><tbody class="click">
+      ${list.map(x => `<tr data-sid="${esc(x.id)}" style="${endOf(x) < today ? 'color:#8a94a6' : ''}"><td>${esc(dateRangeText(x))}（${WD[toDate(x.date).getDay()]}）</td><td>${esc(timeText(x))}</td><td><span class="ev ${evColor(x)}">${esc(x.title)}</span></td><td>${SCHED_TYPE[x.type] || ''}</td><td>${esc(x.region)}</td><td>${esc(salesLabel(x.salesEmail))}</td><td>${esc(salesLabel(x.engineerEmail))}</td><td>${esc(x.place)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted">找不到符合的行程</p>'}
+  </div>`;
+  const go = () => { cal.q = $('#cQ').value.trim(); viewCalendar(); };
+  $('#qGo').onclick = go; $('#cQ').onkeydown = e => { if (e.key === 'Enter') go(); };
+  $('#qBack').onclick = () => { cal.q = ''; viewCalendar(); };
+  $('#cRegion').onchange = e => { cal.region = e.target.value; viewCalendar(); };
+  $('#cPerson').onchange = e => { cal.person = e.target.value; viewCalendar(); };
+  $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
+  app.querySelector('tbody')?.addEventListener('click', e => {
+    const sid = e.target.closest('[data-sid]')?.dataset.sid; const x = list.find(y => y.id === sid);
+    if (x) scheduleDetail(x);
+  });
+}
+
 const canEditSched = x => isAdmin() || x.createdBy === me.email;
 function scheduleDetail(x) {
   const dlg = document.createElement('dialog');
@@ -1089,13 +1132,13 @@ function scheduleDetail(x) {
       close();
       customerForm(null, scheduleToCustomer(x), async id => {
         await updateDoc(doc(db, 'schedules', x.id), { customerId: id, updatedBy: me.email, updatedAt: serverTimestamp() });
-        schedCache.clear();
+        schedCache.clear(); allSchedCache = null;
       });
     }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
       try {
-        await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); viewCalendar();
+        await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); allSchedCache = null; viewCalendar();
         if (x.gcalId) callScript('gcalDelete', { scheduleId: x.id, eventId: x.gcalId }).catch(err => toast('Google 日曆刪除失敗：' + errMsg(err), 8000));
       } catch (err) { toast(errMsg(err)); }
     }
@@ -1180,7 +1223,7 @@ function scheduleForm(r, preset = {}) {
       let id = r?.id;
       if (isNew) id = (await addDoc(collection(db, 'schedules'), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
       else await updateDoc(doc(db, 'schedules', r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-      close(); toast('已儲存'); schedCache.clear();
+      close(); toast('已儲存'); schedCache.clear(); allSchedCache = null;
       if (location.hash.startsWith('#/calendar')) viewCalendar();
       if (isNew) notifySchedule(id, data);
       gcalSync([id]);
@@ -1450,7 +1493,7 @@ async function gcalImportRead() {
       }
       // 連結後由 CRM 內容更新那筆 Google 活動（之後在 CRM 刪除才刪得到）
       for (let i = 0; i < links.length; i += 20) await gcalSync(links.slice(i, i + 20).map(x => x[0]), true).catch(() => 0);
-      schedCache.clear();
+      schedCache.clear(); allSchedCache = null;
       box.innerHTML = `<p>✅ 已匯入 ${rows.length} 筆${links.length ? `、連結 ${links.length} 筆` : ''}，可到「行事曆」查看。標題裡沒對到人的行程，請到行事曆手動補上業務／工程師。</p>`;
     } catch (err) { toast(errMsg(err)); $('#gGo').disabled = false; }
   });
