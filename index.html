@@ -126,9 +126,25 @@ tr.left td{color:#9aa}
 .navc.off{border-color:var(--line);color:#aab}
 select.fon{border-color:var(--purple);color:var(--purple);font-weight:500}
 .mother{width:auto;flex:1 1 200px}
+.ev.priv,.tev.priv{background:#7F1085}
+.ev.tent,.tev.tent{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.28) 0 6px,transparent 6px 12px);outline:1px dashed rgba(255,255,255,.9);outline-offset:-2px}
+.pill{font-size:11px;border-radius:999px;padding:1px 8px;margin-left:6px;font-weight:500;vertical-align:middle}
+.pill.tent{border:1px dashed #b26a00;color:#b26a00}.pill.priv{background:#f1e6f4;color:var(--purple)}
+.hello{font-size:26px;font-weight:700;color:var(--navy)}
+.hdays{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.hday{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;min-width:0}
+.hday.today{border:2px solid var(--navy)}
+.hday h3{margin:0 0 8px;font-size:15px;color:var(--navy)}
+.hitem{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:8px;border-left:4px solid #78849E;background:#f6f7fa;margin-bottom:6px;font-size:14px;cursor:pointer}
+.hitem:hover{filter:brightness(.97)}
+.hitem.north{border-left-color:#3F51B5;background:#f4f5fd}.hitem.midsouth{border-left-color:#2E7D32;background:#f2f9f2}
+.hitem.leave{border-left-color:#D32F2F;background:#fdf3f3}.hitem.priv{border-left-color:#7F1085;background:#fbf3fc}
+.hitem.tent{border-left-style:dashed}
+.hitem .t{color:var(--muted);min-width:92px;white-space:nowrap}
+@media (max-width:900px){.hdays{grid-template-columns:1fr}}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
-.legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .plain::before{display:none}
+.legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .priv::before{background:#7F1085}.legend .plain::before{display:none}
 .pick{max-height:320px;overflow:auto;margin-top:8px}
 .pick div{padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
 .pick div:hover{background:#f3f4fb}
@@ -200,7 +216,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13j</div>
+<div class="ver">版本 2026-10-13k</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -371,6 +387,8 @@ onAuthStateChanged(auth, async u => {
   let switched = false;
   try { switched = localStorage.getItem('crm_last_user') !== email; localStorage.setItem('crm_last_user', email); } catch (e) { switched = true; }
   try { await syncCustomers(switched); } catch (e) { toast('客戶資料載入不完整：' + errMsg(e), 10000); }
+  privCache = null;
+  try { const pf = await getDoc(doc(db, 'prefs', email)); cal.weekStart = pf.exists() && pf.data().weekStart === 1 ? 1 : 0; } catch (e) { cal.weekStart = 0; }
   route();
   timer = setInterval(() => { if (document.visibilityState === "visible") softRefresh(); }, 5 * 60 * 1000); // 視窗沒在看時不更新，省讀取次數
 });
@@ -417,8 +435,8 @@ async function softRefresh() {
 
 // ---------------- 路由 ----------------
 function renderNav() {
-  const h = location.hash || '#/customers';
-  const items = [['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
+  const h = location.hash || '#/home';
+  const items = [['#/home', '首頁'], ['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
   if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
@@ -428,14 +446,16 @@ function renderNav() {
 function route() {
   if (!me) return;
   renderNav();
-  const [, page, id] = (location.hash || '#/customers').split('/');
+  const [, page, id] = (location.hash || '#/home').split('/');
   if (page === 'customer' && id) viewCustomer(decodeURIComponent(id));
+  else if (page === 'home' || !page) viewHome();
   else if (page === 'calendar') viewCalendar();
   else if (page === 'records') viewRecords();
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else if (page === 'import' && isAdmin()) viewImport();
-  else viewCustomers();
+  else if (page === 'customers') viewCustomers();
+  else viewHome();
 }
 window.addEventListener('hashchange', route);
 
@@ -981,9 +1001,58 @@ $('#npanel').addEventListener('click', async e => {
   location.hash = '#/calendar'; route();
 });
 
+// ---------------- 個人首頁 ----------------
+async function viewHome() {
+  const t0 = new Date(), days = [0, 1, 2].map(n => ymdOf(addDays(t0, n)));
+  const wdName = d => '星期' + WD[toDate(d).getDay()];
+  app.innerHTML = `<div class="card"><div class="hello">${t0.getFullYear()} 年 ${t0.getMonth() + 1} 月 ${t0.getDate()} 日　${wdName(days[0])}</div><p class="muted">載入中…</p></div>`;
+  let all = [], hol = new Map();
+  try {
+    const months = [...new Set([ymdOf(addDays(t0, -31)).slice(0, 7), ...days.map(d => d.slice(0, 7))])];
+    for (const m of months) all = all.concat(await loadMonth(m));
+    all = all.concat(await loadPrivate());
+    for (const y of [...new Set(days.map(d => d.slice(0, 4)))]) (await loadHolidays(y)).forEach((v, k) => hol.set(k, v));
+  } catch (e) { app.innerHTML = `<div class="card"><p>載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (location.hash && !location.hash.startsWith('#/home')) return;
+  const mine = all.filter(x => x._private || [x.salesEmail, x.engineerEmail, x.createdBy].includes(me.email));
+  const byDay = days.map(d => mine.filter(x => x.date <= d && endOf(x) >= d).sort((a, b) => (a.startTime || '').localeCompare(b.startTime || '')));
+  const total = byDay.reduce((n, l) => n + l.length, 0);
+  const hr = t0.getHours(), greet = hr < 11 ? '早安' : hr < 18 ? '午安' : '晚安';
+  const names = ['今天', '明天', '後天'];
+  const item = x => `<div class="hitem ${evColor(x)}" data-sid="${esc(x.id)}" data-p="${x._private ? 1 : 0}"><span class="t">${esc(timeText(x))}</span><div><b>${esc(x.title)}</b>${x._private ? '<span class="pill priv">🔒 私人</span>' : ''}${x.tentative && !x._private ? '<span class="pill tent">暫定</span>' : ''}
+    <div class="muted">${[SCHED_TYPE[x.type], x.region, x.place, endOf(x) !== x.date ? dateRangeText(x) : ''].filter(Boolean).map(esc).join(' · ')}</div></div></div>`;
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><div><div class="hello">${t0.getFullYear()} 年 ${t0.getMonth() + 1} 月 ${t0.getDate()} 日　${wdName(days[0])}</div>
+      <div class="muted" style="margin-top:4px">${greet}，${esc(me.nameZh || me.email)}　·　今天 ${byDay[0].length} 件、未來三天共 ${total} 件</div></div>
+      <span class="spacer"></span><button class="ghost" id="hPriv">＋ 私人待辦</button><button id="hAdd">＋ 新增行程</button></div>
+    <div class="hdays">${days.map((d, i) => `<div class="hday ${i === 0 ? 'today' : ''}"><h3>${names[i]} ${Number(d.slice(5, 7))}/${Number(d.slice(8))}（${WD[toDate(d).getDay()]}）</h3>
+      ${hol.has(d) ? `<span class="ev holiday" style="display:inline-block;margin-bottom:6px">${esc(hol.get(d))}</span>` : ''}
+      ${byDay[i].map(item).join('') || '<p class="muted">沒有行程</p>'}</div>`).join('')}</div>
+    <p class="muted" style="margin-top:10px">只列跟你有關的：你是業務、工程師或建立者的行程，加上你的私人待辦。點任一筆可開啟詳細。</p>
+  </div>`;
+  $('#hAdd').onclick = () => scheduleForm(null, { date: days[0] });
+  $('#hPriv').onclick = () => scheduleForm(null, { date: days[0], type: 'other', salesEmail: '', engineerEmail: '', _private: true });
+  app.querySelector('.hdays').addEventListener('click', e => {
+    const el = e.target.closest('[data-sid]'); if (!el) return;
+    const x = mine.find(y => y.id === el.dataset.sid && !!y._private === (el.dataset.p === '1')); if (x) scheduleDetail(x);
+  });
+}
+
 // ---------------- 行事曆 ----------------
 const SCHED_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo', class: '上課', leave: '休假', other: '其他' };
-const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '' };
+const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '', weekStart: 0 };
+let privCache = null; // 我的私人行程
+async function loadPrivate() {
+  if (!privCache) privCache = (await getDocs(query(collection(db, 'privateSchedules'), where('owner', '==', me.email)))).docs.map(d => ({ id: d.id, ...d.data(), _private: true }));
+  return privCache;
+}
+const wdOrder = () => cal.weekStart === 1 ? [...WD.slice(1), WD[0]] : WD;
+const backTo = d => (d.getDay() - cal.weekStart + 7) % 7; // 往前幾天到該週第一天
+function refreshSchedViews() {
+  schedCache.clear(); allSchedCache = null; privCache = null;
+  if (location.hash.startsWith('#/calendar')) viewCalendar();
+  else if (!location.hash || location.hash.startsWith('#/home')) viewHome();
+}
 let allSchedCache = null; // 搜尋用：全部行程
 const schedCache = new Map(); // 'YYYY-MM' -> [schedules]
 const holidayCache = new Map(); // 'YYYY' -> Map(date -> name)
@@ -994,7 +1063,8 @@ const WD = ['日', '一', '二', '三', '四', '五', '六'];
 const endOf = x => x.endDate && x.endDate > x.date ? x.endDate : x.date;
 const dateRangeText = x => endOf(x) !== x.date ? `${x.date}～${endOf(x)}` : x.date;
 const timeText = x => x.startTime ? x.startTime + (x.endTime ? '～' + x.endTime : '') : '全天';
-const evColor = x => x.type === 'leave' ? 'leave' : x.region === '台北' ? 'north' : (x.region === '台中' || x.region === '台南') ? 'midsouth' : 'none';
+const evColor = x => (x._private ? 'priv' : evBase(x)) + (x.tentative && !x._private ? ' tent' : '');
+const evBase = x => x.type === 'leave' ? 'leave' : x.region === '台北' ? 'north' : (x.region === '台中' || x.region === '台南') ? 'midsouth' : 'none';
 
 function afterRecordChange(c) {
   if (c?.id) recCache.delete(c.id);
@@ -1023,11 +1093,11 @@ async function loadHolidays(year) {
 }
 function calRange() {
   const cur = toDate(cal.cursor);
-  if (cal.view === 'week') { const start = addDays(cur, -cur.getDay()); return [start, addDays(start, 6)]; }
+  if (cal.view === 'week') { const start = addDays(cur, -backTo(cur)); return [start, addDays(start, 6)]; }
   const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
   const last = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
   if (cal.view === 'list') return [first, last];
-  return [addDays(first, -first.getDay()), addDays(last, 6 - last.getDay())];
+  return [addDays(first, -backTo(first)), addDays(last, 6 - backTo(last))];
 }
 async function viewCalendar() {
   if (cal.q) return viewCalSearch();
@@ -1038,6 +1108,7 @@ async function viewCalendar() {
   let all = []; const hol = new Map();
   try {
     for (const m of months) all = all.concat(await loadMonth(m));
+    all = all.concat(await loadPrivate());
     for (const y of [...new Set([s0.slice(0, 4), s1.slice(0, 4)])]) (await loadHolidays(y)).forEach((v, k) => hol.set(k, v));
   } catch (e) { app.innerHTML = `<div class="card"><p>行程載入失敗：${esc(errMsg(e))}</p></div>`; return; }
   if (!location.hash.startsWith('#/calendar')) return;
@@ -1049,7 +1120,7 @@ async function viewCalendar() {
   const cur = toDate(cal.cursor);
   const title = cal.view === 'week' ? `${s0} ～ ${s1}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
   const today = ymdOf(new Date());
-  const chip = x => `<span class="ev ${evColor(x)}" data-sid="${esc(x.id)}" title="${esc(x.title)}">${x.startTime ? esc(x.startTime) + ' ' : ''}${esc(x.title)}</span>`;
+  const chip = x => `<span class="ev ${evColor(x)}" data-sid="${esc(x.id)}" title="${esc(x.title)}">${x._private ? '🔒 ' : ''}${x.startTime ? esc(x.startTime) + ' ' : ''}${x.tentative ? '【暫定】' : ''}${esc(x.title)}</span>`;
   let body = '';
   if (cal.view === 'list') {
     const hols = [...hol].filter(([d]) => d >= s0 && d <= s1);
@@ -1061,7 +1132,7 @@ async function viewCalendar() {
     body = weekGrid(start, end, list, hol, today, chip);
   } else {
     const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
-    body = `<div class="cal ${cal.view === 'week' ? 'week' : ''}">${WD.map(w => `<div class="dh">${w}</div>`).join('')}${days.map(d => {
+    body = `<div class="cal ${cal.view === 'week' ? 'week' : ''}">${wdOrder().map(w => `<div class="dh">${w}</div>`).join('')}${days.map(d => {
       const dd = toDate(d); const out = cal.view === 'month' && dd.getMonth() !== cur.getMonth();
       return `<div class="dc ${out ? 'out' : ''} ${d === today ? 'today' : ''}" data-day="${d}"><span class="dn">${cal.view === 'week' ? (dd.getMonth() + 1) + '/' : ''}${dd.getDate()}</span>${hol.has(d) ? `<span class="ev holiday">${esc(hol.get(d))}</span>` : ''}${list.filter(x => x.date <= d && endOf(x) >= d).map(chip).join('')}</div>`;
     }).join('')}</div>`;
@@ -1078,10 +1149,10 @@ async function viewCalendar() {
       <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <button class="ghost small" id="cRefresh">重新整理</button>
     </div>
-    <div class="toolbar"><input id="cQ" placeholder="🔍 搜尋全部行程：標題、內容、地點、人員" style="max-width:360px"></div>
+    <div class="toolbar"><input id="cQ" placeholder="🔍 搜尋全部行程：標題、內容、地點、人員" style="max-width:360px"><span class="spacer"></span>${cal.view !== 'list' ? `<label class="checks" style="font-size:14px"><span style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="wkMon" style="width:auto" ${cal.weekStart === 1 ? 'checked' : ''}>週一開始</span></label>` : ''}</div>
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆行程</div>
     ${body}
-    <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span>' : ''}</div>
+    <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span><span class="priv">🔒 私人</span><span class="plain">斜紋＝暫定</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span>' : ''}</div>
   </div>`;
   const move = n => { const c0 = toDate(cal.cursor); cal.cursor = ymdOf(cal.view === 'week' ? addDays(c0, 7 * n) : new Date(c0.getFullYear(), c0.getMonth() + n, 1)); viewCalendar(); };
   $('#prev').onclick = () => move(-1); $('#next').onclick = () => move(1);
@@ -1090,7 +1161,11 @@ async function viewCalendar() {
   $('#cRegion').onchange = e => { cal.region = e.target.value; viewCalendar(); };
   $('#cPerson').onchange = e => { cal.person = e.target.value; viewCalendar(); };
   $('#cType').onchange = e => { cal.type = e.target.value; viewCalendar(); };
-  $('#cRefresh').onclick = () => { schedCache.clear(); allSchedCache = null; allSchedCache = null; viewCalendar(); };
+  $('#wkMon')?.addEventListener('change', async e => {
+    cal.weekStart = e.target.checked ? 1 : 0; viewCalendar();
+    try { await setDoc(doc(db, 'prefs', me.email), { weekStart: cal.weekStart }, { merge: true }); } catch (err) { toast('設定未儲存：' + errMsg(err)); }
+  });
+  $('#cRefresh').onclick = () => { schedCache.clear(); allSchedCache = null; privCache = null; viewCalendar(); };
   $('#cQ').onkeydown = e => { if (e.key === 'Enter' && e.target.value.trim()) { cal.q = e.target.value.trim(); viewCalendar(); } };
   $('#addS').onclick = () => scheduleForm(null, { date: cal.cursor });
   app.querySelector('.card').addEventListener('click', e => {
@@ -1140,7 +1215,7 @@ function weekGrid(start, end, list, hol, today, chip) {
     <div class="wk-row wk-body"><div class="wk-times" style="height:${H}px">${hours.map(h => `<span style="top:${(h - h0) * WK_H}px">${String(h).padStart(2, '0')}:00</span>`).join('')}</div>
     ${days.map(d => `<div class="wk-col ${d === today ? 'today' : ''}" data-day="${d}" data-h0="${h0}" style="height:${H}px">${place(timed.filter(x => x.date === d)).map(o => {
       const top = (o.s0 - h0 * 60) / 60 * WK_H, ht = Math.max((o.e0 - o.s0) / 60 * WK_H - 2, 20);
-      return `<div class="tev ${evColor(o.x)}" data-sid="${esc(o.x.id)}" title="${esc(o.x.title)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)"><b>${esc(o.x.title)}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}</div>`;
+      return `<div class="tev ${evColor(o.x)}" data-sid="${esc(o.x.id)}" title="${esc(o.x.title)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)"><b>${o.x._private ? '🔒 ' : ''}${o.x.tentative ? '【暫定】' : ''}${esc(o.x.title)}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}</div>`;
     }).join('')}${d === today && nowMin >= h0 * 60 && nowMin <= h1 * 60 ? `<div class="wk-now" style="top:${(nowMin - h0 * 60) / 60 * WK_H}px"></div>` : ''}</div>`).join('')}</div>
   </div></div>`;
 }
@@ -1159,7 +1234,7 @@ async function viewCalSearch() {
         });
       } catch (e) { /* 沒有快取就全部抓 */ }
       (await getDocs(max ? query(base, where('updatedAt', '>', max)) : base)).docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
-      allSchedCache = [...map.values()];
+      allSchedCache = [...map.values()].concat(await loadPrivate());
     }
   }
   catch (e) { app.innerHTML = `<div class="card"><p>搜尋失敗：${esc(errMsg(e))}</p></div>`; return; }
@@ -1194,27 +1269,29 @@ async function viewCalSearch() {
   app.querySelector('tbody')?.addEventListener('click', e => {
     const sid = e.target.closest('[data-sid]')?.dataset.sid; const x = list.find(y => y.id === sid);
     if (!x) return;
-    getDoc(doc(db, 'schedules', sid)).then(snap => {
+    getDoc(doc(db, x._private ? 'privateSchedules' : 'schedules', sid)).then(snap => {
       if (!snap.exists()) { toast('這個行程已被刪除'); allSchedCache = allSchedCache?.filter(y => y.id !== sid) || null; viewCalendar(); }
-      else scheduleDetail({ id: sid, ...snap.data() });
+      else scheduleDetail({ id: sid, ...snap.data(), _private: !!x._private });
     }).catch(err => toast(errMsg(err)));
   });
 }
 
-const canEditSched = x => isAdmin() || x.createdBy === me.email;
+const canEditSched = x => x._private || isAdmin() || x.createdBy === me.email;
+const SCHED_FIELDS = ['title', 'type', 'region', 'date', 'endDate', 'startTime', 'endTime', 'salesEmail', 'engineerEmail', 'place', 'url', 'content'];
 function scheduleDetail(x) {
   const dlg = document.createElement('dialog');
   const f = (l, v) => `<div class="field"><label>${l}</label><div class="val">${esc(v) || '<span class="muted">—</span>'}</div></div>`;
   const wd = d => WD[toDate(d).getDay()];
-  dlg.innerHTML = `<h1><span class="ev ${evColor(x)}" style="display:inline-block;font-size:13px;vertical-align:middle">${SCHED_TYPE[x.type] || ''}</span> ${esc(x.title)}</h1>
+  dlg.innerHTML = `<h1><span class="ev ${evColor(x)}" style="display:inline-block;font-size:13px;vertical-align:middle">${SCHED_TYPE[x.type] || ''}</span> ${esc(x.title)}${x._private ? ' <span class="pill priv">🔒 私人</span>' : ''}${x.tentative && !x._private ? ' <span class="pill tent">暫定</span>' : ''}</h1>
     <p class="muted">${esc(x.date)}（${wd(x.date)}）${endOf(x) !== x.date ? `～${esc(endOf(x))}（${wd(endOf(x))}）` : ''}　${esc(timeText(x))}</p>
     <div class="grid">${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}${f('地點', x.place)}
       <div class="field full"><label>網址</label><div class="val">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a>` : '<span class="muted">—</span>'}</div></div>
       <div class="field full"><label>內容</label><div class="val" style="white-space:pre-wrap">${esc(x.content) || '<span class="muted">—</span>'}</div></div>
       ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
-      ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
+      ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() && !x._private ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
       ${demoTypes().filter(t => isAdmin() || (t === 'sales' ? x.salesEmail : x.engineerEmail) === me.email).map(t => `<button class="accent" data-a="demo" data-t="${t}">轉為${DEMO_TYPE[t]}紀錄</button>`).join('')}
+      <button class="ghost" data-a="copy">⧉ 複製</button>
       ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
@@ -1223,6 +1300,11 @@ function scheduleDetail(x) {
     const a = e.target.dataset.a; if (!a) return;
     if (a === 'close') close();
     if (a === 'edit') { close(); scheduleForm(x); }
+    if (a === 'copy') {
+      close();
+      const preset = {}; SCHED_FIELDS.forEach(k => { preset[k] = x[k] || ''; });
+      scheduleForm(null, { ...preset, _private: !!x._private, tentative: !!x.tentative });
+    }
     if (a === 'open') { close(); location.hash = '#/customer/' + encodeURIComponent(x.customerId); }
     if (a === 'demo') {
       close();
@@ -1234,14 +1316,14 @@ function scheduleDetail(x) {
       close();
       customerForm(null, scheduleToCustomer(x), async id => {
         await updateDoc(doc(db, 'schedules', x.id), { customerId: id, updatedBy: me.email, updatedAt: serverTimestamp() });
-        schedCache.clear(); allSchedCache = null;
+        refreshSchedViews();
       });
     }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
       try {
-        await deleteDoc(doc(db, 'schedules', x.id)); close(); toast('已刪除'); schedCache.clear(); allSchedCache = null; viewCalendar();
-        if (x.gcalId) callScript('gcalDelete', { scheduleId: x.id, eventId: x.gcalId }).catch(err => toast('Google 日曆刪除失敗：' + errMsg(err), 8000));
+        await deleteDoc(doc(db, x._private ? 'privateSchedules' : 'schedules', x.id)); close(); toast('已刪除'); refreshSchedViews();
+        if (x.gcalId && !x._private) callScript('gcalDelete', { scheduleId: x.id, eventId: x.gcalId }).catch(err => toast('Google 日曆刪除失敗：' + errMsg(err), 8000));
       } catch (err) { toast(errMsg(err)); }
     }
   });
@@ -1301,11 +1383,22 @@ function scheduleForm(r, preset = {}) {
       <div class="field full"><label>地點</label><input name="place" value="${esc(cur.place || '')}"></div>
       <div class="field full"><label>網址</label><input name="url" type="url" value="${esc(cur.url || '')}" placeholder="https://"></div>
       <div class="field full"><label>內容</label><textarea name="content" rows="8" placeholder="客戶名稱、聯絡窗口、電話、備註…">${esc(cur.content || '')}</textarea></div>
+      <div class="field full">
+        <div class="checks"><label><input type="checkbox" name="private" ${cur._private ? 'checked' : ''} ${!isNew && !r._private && r.createdBy !== me.email ? 'disabled' : ''}>🔒 私人行程（只有自己看得到；不寄信、不通知、不同步 Google 日曆）</label></div>
+        <div class="checks" style="margin-top:6px" id="tentRow"><label><input type="checkbox" name="tentative" ${cur.tentative ? 'checked' : ''}>暫定（先不寄信、不通知、不同步 Google；之後取消勾選＝確定，那時才寄信）</label></div>
+      </div>
     </div>
-    <p class="muted">${isNew ? '儲存後會以系統通知＋Email 通知所選的業務、工程師。' : ''}</p>
+    <p class="muted" id="sfNote"></p>
     <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
   document.body.appendChild(dlg);
   const form = dlg.querySelector('#sf2');
+  const note = () => {
+    dlg.querySelector('#tentRow').classList.toggle('hidden', form.private.checked);
+    dlg.querySelector('#sfNote').textContent = form.private.checked ? '私人行程只有你自己看得到。'
+      : form.tentative.checked ? '暫定中：不會寄信或通知，也不會同步到 Google 日曆。'
+      : (isNew || r?.tentative || r?._private) ? '儲存後會以系統通知＋Email 通知所選的業務、工程師。' : '';
+  };
+  form.private.addEventListener('change', note); form.tentative.addEventListener('change', note); note();
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.querySelector('#cancel').onclick = close;
   dlg.addEventListener('cancel', () => dlg.remove());
@@ -1320,14 +1413,39 @@ function scheduleForm(r, preset = {}) {
     if (data.endDate === data.date) data.endDate = '';
     if (!data.endDate && data.startTime && data.endTime && data.endTime < data.startTime) return toast('結束時間不能早於開始時間');
     if (data.url && !/^https?:\/\//i.test(data.url)) data.url = 'https://' + data.url;
+    const wantPriv = form.private.checked;
+    data.tentative = !wantPriv && form.tentative.checked;
     dlg.querySelector('#save').disabled = true;
+    const stamp = { updatedBy: me.email, updatedAt: serverTimestamp() };
+    const newDoc = { createdBy: me.email, createdAt: serverTimestamp(), ...stamp };
+    const wasPriv = !isNew && !!r._private;
     try {
       let id = r?.id;
-      if (isNew) id = (await addDoc(collection(db, 'schedules'), { ...data, createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() })).id;
-      else await updateDoc(doc(db, 'schedules', r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-      close(); toast('已儲存'); schedCache.clear(); allSchedCache = null;
-      if (location.hash.startsWith('#/calendar')) viewCalendar();
-      if (isNew) notifySchedule(id, data);
+      if (wantPriv) {
+        // 私人行程：存在 privateSchedules，只有自己看得到
+        if (wasPriv) await updateDoc(doc(db, 'privateSchedules', r.id), { ...data, ...stamp });
+        else {
+          await addDoc(collection(db, 'privateSchedules'), { ...data, owner: me.email, ...newDoc });
+          if (!isNew) {
+            await deleteDoc(doc(db, 'schedules', r.id));
+            if (r.gcalId) callScript('gcalDelete', { scheduleId: r.id, eventId: r.gcalId }).catch(err => toast('Google 日曆刪除失敗：' + errMsg(err), 8000));
+          }
+        }
+        close(); toast('已儲存（私人）'); refreshSchedViews(); return;
+      }
+      const confirmNow = !data.tentative && (isNew || wasPriv || r.tentative); // 這次才變成正式行程 → 寄信通知
+      if (isNew || wasPriv) {
+        id = (await addDoc(collection(db, 'schedules'), { ...data, ...newDoc })).id;
+        if (wasPriv) await deleteDoc(doc(db, 'privateSchedules', r.id));
+      } else await updateDoc(doc(db, 'schedules', r.id), { ...data, ...stamp });
+      close(); toast(data.tentative ? '已儲存（暫定，未通知）' : '已儲存'); refreshSchedViews();
+      if (data.tentative) {
+        if (!isNew && !wasPriv && r.gcalId) { // 改回暫定：從 Google 日曆拿掉
+          callScript('gcalDelete', { scheduleId: r.id, eventId: r.gcalId }).then(() => updateDoc(doc(db, 'schedules', r.id), { gcalId: '' })).catch(err => toast('Google 日曆移除失敗：' + errMsg(err), 8000));
+        }
+        return;
+      }
+      if (confirmNow) notifySchedule(id, data);
       gcalSync([id]);
     } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
@@ -1653,7 +1771,7 @@ async function gcalBackfill() {
   if (!from) return toast('請選擇日期');
   box.innerHTML = '<p class="muted">檢查中…</p>';
   let ids;
-  try { ids = (await getDocs(query(collection(db, 'schedules'), where('date', '>=', from)))).docs.filter(d => !d.data().gcalId && !d.data().gcalSkip).map(d => d.id); }
+  try { ids = (await getDocs(query(collection(db, 'schedules'), where('date', '>=', from)))).docs.filter(d => !d.data().gcalId && !d.data().gcalSkip && !d.data().tentative).map(d => d.id); }
   catch (err) { box.innerHTML = `<p style="color:var(--danger)">${esc(errMsg(err))}</p>`; return; }
   if (!ids.length) { box.innerHTML = '<p>沒有需要補同步的行程。</p>'; return; }
   if (!confirm(`有 ${ids.length} 筆行程還沒同步到 Google 日曆，開始同步？`)) { box.innerHTML = ''; return; }
