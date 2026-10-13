@@ -216,7 +216,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13l</div>
+<div class="ver">版本 2026-10-13m</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1317,10 +1317,9 @@ function scheduleDetail(x) {
     }
     if (a === 'conv') {
       close();
-      customerForm(null, scheduleToCustomer(x), async id => {
-        await updateDoc(doc(db, 'schedules', x.id), { customerId: id, updatedBy: me.email, updatedAt: serverTimestamp() });
-        refreshSchedViews();
-      });
+      const link = async id => { await updateDoc(doc(db, 'schedules', x.id), { customerId: id, updatedBy: me.email, updatedAt: serverTimestamp() }); refreshSchedViews(); };
+      findSameCustomer(x, async c => { try { await link(c.id); toast(`已連結到 ${custNo(c)} ${c.name}`); } catch (err) { toast(errMsg(err)); } },
+        () => customerForm(null, scheduleToCustomer(x), link));
     }
     if (a === 'del') {
       if (!confirm('確定刪除這個行程？')) return;
@@ -1628,6 +1627,51 @@ async function viewRecords() {
   });
 }
 
+// 行程轉潛在客戶前：先找系統裡是不是已經有同一家，避免重複建立
+const coreName = n => String(n || '').toLowerCase().replace(/股份有限公司|有限公司|股份|公司|企業社|企業|工業社|實業|\(.*?\)|（.*?）|\s|-/g, '');
+const digits = v => String(v || '').replace(/\D/g, '');
+function findSameCustomer(x, onLink, onNew) {
+  const guess = scheduleToCustomer(x);
+  const kw0 = guess.name || String(x.title || '').split(/[-－_\[［(（]/)[0].trim();
+  const phones = [guess.phone, guess.mobile].map(digits).filter(p => p.length >= 7);
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<h1>轉為潛在客戶：先確認有沒有重複</h1>
+    <p class="muted">依行程標題、內容裡的客戶名稱與電話，找出系統裡可能是同一家的客戶。是同一家就直接連結，不會新增。</p>
+    <input id="fq" value="${esc(kw0)}" placeholder="輸入客戶名稱、編號、聯絡人、電話搜尋"><div class="pick" id="flist"></div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="fc">取消</button><button class="accent" id="fn">都不是，新增潛在客戶</button></div>`;
+  document.body.appendChild(dlg);
+  const draw = () => {
+    const q = dlg.querySelector('#fq').value.trim().toLowerCase(), cq = coreName(q), dq = digits(q);
+    const score = c => {
+      const cn = coreName(c.name);
+      let sc = 0;
+      if (cq && cn && (cn.includes(cq) || cq.includes(cn))) sc += cn === cq ? 3 : 2;
+      if (q && [custNo(c), c.leadNo, c.formalNo, c.name, c.contact].some(v => String(v || '').toLowerCase().includes(q))) sc += 1;
+      const cp = [c.phone, c.mobile].map(digits);
+      if ((dq.length >= 7 && cp.some(p => p.includes(dq))) || phones.some(p => cp.some(v => v && (v.includes(p) || p.includes(v))))) sc += 3;
+      return sc;
+    };
+    const list = [...customers.values()].filter(c => !c.deleted && c.id !== UNLINKED_ID).map(c => [score(c), c]).filter(([sc]) => sc > 0)
+      .sort((a, b) => b[0] - a[0] || String(a[1].name).localeCompare(String(b[1].name), 'zh-Hant')).slice(0, 30);
+    dlg.querySelector('#flist').innerHTML = list.map(([sc, c]) => `<div data-id="${esc(c.id)}" style="display:flex;gap:10px;align-items:center">
+      <div style="flex:1"><strong>${esc(custNo(c))}</strong>　${esc(c.name)} <span class="tag ${c.status === 'formal' ? 'formal' : 'potential'}">${c.status === 'formal' ? '正式' : '潛在'}</span>
+      <div class="muted">${[c.region, salesLabel(c.salesEmail), c.contact, c.phone].filter(Boolean).map(esc).join(' · ')}</div></div>
+      ${sc >= 3 ? '<span class="pill tent">很可能同一家</span>' : ''}<button class="ghost small">連結這位</button></div>`).join('') || '<p class="muted">找不到相似的客戶，可以放心新增。</p>';
+  };
+  draw();
+  dlg.querySelector('#fq').addEventListener('input', draw);
+  const done = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#fc').onclick = done;
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#fn').onclick = () => { done(); onNew(); };
+  dlg.querySelector('#flist').addEventListener('click', e => {
+    const id = e.target.closest('[data-id]')?.dataset.id; if (!id) return;
+    const c = customers.get(id);
+    if (!confirm(`把這個行程連結到「${custNo(c)} ${c.name}」？\n不會新增客戶。`)) return;
+    done(); onLink(c);
+  });
+  dlg.showModal();
+}
 function pickCustomer(cb, onCancel) {
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<h1>選擇客戶</h1><input id="pq" placeholder="輸入名稱、編號、聯絡人搜尋（潛在、正式客戶都可選）"><div class="pick" id="plist"></div>
