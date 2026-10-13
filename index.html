@@ -216,7 +216,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13m</div>
+<div class="ver">版本 2026-10-13n</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -759,8 +759,8 @@ const REC = {
   issues: {
     title: '問題追蹤', kind: 'issue',
     canAdd: () => isAdmin() || isEngineer(), canEdit: () => isAdmin() || isEngineer(), canDel: () => isAdmin(),
-    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['status', '狀態', 'list', false, ['發問中', '未解決', '已解決', '未來新增', '近期觀察', '不解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
-    cols: [['date', '日期'], ['title', '名稱'], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
+    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['ticketNo', '原廠單號', 'text'], ['reporterEmail', '回報者', 'user', false, ['engineer']], ['status', '狀態', 'list', false, ['發問中', '未解決', '已解決', '未來新增', '近期觀察', '不解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
+    cols: [['date', '日期'], ['ticketNo', '原廠單號', r => r.ticketNo ? '#' + r.ticketNo : ''], ['title', '名稱'], ['reporterEmail', '回報者', r => salesLabel(r.reporterEmail)], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
   },
   installs: {
     title: '工程師安裝紀錄',
