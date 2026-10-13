@@ -56,6 +56,8 @@ tbody.click tr:hover{background:#f3f4fb}
 .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
 .field .val{min-height:22px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}
 textarea{resize:vertical;line-height:1.5}
+.tsel{display:flex;align-items:center;gap:6px}
+.tsel select{width:auto;min-width:72px}
 .checks{display:flex;flex-wrap:wrap;gap:16px}
 .checks label{display:flex;align-items:center;gap:6px;font-size:14px}
 .checks input{width:auto}
@@ -191,7 +193,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13a</div>
+<div class="ver">版本 2026-10-13b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -234,6 +236,18 @@ const ui = { status: 'all', region: '', sales: '', q: '', sort: 'no', dir: 1 };
 
 const $ = s => document.querySelector(s);
 const app = $('#app');
+// 24 小時制時間選擇（時：分），存成 HH:MM；「時」選空白＝不填
+function timeInput(name, val) {
+  const [h = '', m = ''] = String(val || '').split(':');
+  const mins = []; for (let i = 0; i < 60; i += 5) mins.push(String(i).padStart(2, '0'));
+  if (m && !mins.includes(m)) mins.push(m), mins.sort();
+  return `<span class="tsel"><input type="hidden" name="${name}" value="${esc(val || '')}"><select class="th"><option value="">--</option>${Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(x => `<option ${x === h ? 'selected' : ''}>${x}</option>`).join('')}</select><b>:</b><select class="tm">${mins.map(x => `<option ${x === (m || '00') ? 'selected' : ''}>${x}</option>`).join('')}</select></span>`;
+}
+document.addEventListener('change', e => {
+  const box = e.target.closest?.('.tsel'); if (!box) return;
+  const h = box.querySelector('.th').value, m = box.querySelector('.tm').value;
+  box.querySelector('input').value = h ? `${h}:${m}` : '';
+});
 // 手機版表格改成卡片：每格加上欄位名稱
 function labelTables() {
   document.querySelectorAll('.tablewrap table').forEach(t => {
@@ -774,7 +788,7 @@ function recordForm(k, c, r, preset = {}) {
     if (lock && ((lock === 'sales' && f === 'salesEmail') || (lock === 'engineer' && f === 'engineerEmail'))) return `<div class="${cls}">${lab}<input type="hidden" name="${f}" value="${esc(me.email)}"><div class="val">${esc(salesLabel(me.email))}</div></div>`;
     if (type === 'textarea') return `<div class="${cls}">${lab}<textarea name="${f}" rows="4">${esc(cur[f])}</textarea></div>`;
     if (type === 'date') return `<div class="${cls}">${lab}<input type="date" name="${f}" value="${esc(cur[f])}"></div>`;
-    if (type === 'time') return `<div class="${cls}">${lab}<input type="time" name="${f}" value="${esc(cur[f])}"></div>`;
+    if (type === 'time') return `<div class="${cls}">${lab}${timeInput(f, cur[f])}</div>`;
     if (type === 'sched') {
       const list = [...((recCache.get(c.id) || {}).schedules || [])].sort((a, b) => String(b.date).localeCompare(String(a.date)));
       return `<div class="${cls}">${lab}<select name="${f}"><option value="">（不指定）</option>${list.map(x => `<option value="${esc(x.id)}" ${cur[f] === x.id ? 'selected' : ''}>${esc(x.date)} ${esc(x.startTime)} ${esc(DEMO_TYPE[x.type] || '')}</option>`).join('')}</select></div>`;
@@ -1020,7 +1034,7 @@ function weekGrid(start, end, list, hol, today, chip) {
   return `<div class="wk-wrap"><div class="wk">
     <div class="wk-row wk-head"><div class="wk-lab"></div>${days.map(d => { const dd = toDate(d); return `<div class="wk-dh ${d === today ? 'today' : ''}"><small>週${WD[dd.getDay()]}</small><b>${dd.getMonth() + 1}/${dd.getDate()}</b></div>`; }).join('')}</div>
     <div class="wk-row wk-all"><div class="wk-lab">全天</div>${days.map(d => `<div class="wk-ad" data-day="${d}">${hol.has(d) ? `<span class="ev holiday">${esc(hol.get(d))}</span>` : ''}${allDay.filter(x => x.date <= d && endOf(x) >= d).map(chip).join('')}</div>`).join('')}</div>
-    <div class="wk-row wk-body"><div class="wk-times" style="height:${H}px">${hours.map(h => `<span style="top:${(h - h0) * WK_H}px">${h < 12 ? '上午' : '下午'}${h <= 12 ? h : h - 12}點</span>`).join('')}</div>
+    <div class="wk-row wk-body"><div class="wk-times" style="height:${H}px">${hours.map(h => `<span style="top:${(h - h0) * WK_H}px">${String(h).padStart(2, '0')}:00</span>`).join('')}</div>
     ${days.map(d => `<div class="wk-col ${d === today ? 'today' : ''}" data-day="${d}" data-h0="${h0}" style="height:${H}px">${place(timed.filter(x => x.date === d)).map(o => {
       const top = (o.s0 - h0 * 60) / 60 * WK_H, ht = Math.max((o.e0 - o.s0) / 60 * WK_H - 2, 20);
       return `<div class="tev ${evColor(o.x)}" data-sid="${esc(o.x.id)}" title="${esc(o.x.title)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)"><b>${esc(o.x.title)}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}</div>`;
@@ -1118,8 +1132,8 @@ function scheduleForm(r, preset = {}) {
       <div class="field"><label>區域</label><select name="region"><option value="">（未分區）</option>${REGIONS.map(x => `<option ${cur.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="field"><label>開始日期 *</label><input type="date" name="date" value="${esc(cur.date)}"></div>
       <div class="field"><label>結束日期</label><input type="date" name="endDate" value="${esc(cur.endDate || '')}"><div class="muted">單日行程可留空</div></div>
-      <div class="field"><label>開始時間</label><input type="time" name="startTime" value="${esc(cur.startTime || '')}"><div class="muted">留空＝全天</div></div>
-      <div class="field"><label>結束時間</label><input type="time" name="endTime" value="${esc(cur.endTime || '')}"></div>
+      <div class="field"><label>開始時間</label>${timeInput('startTime', cur.startTime)}<div class="muted">留空＝全天</div></div>
+      <div class="field"><label>結束時間</label>${timeInput('endTime', cur.endTime)}</div>
       <div class="field"><label>業務</label><select name="salesEmail"><option value="">（未指定）</option>${userOptions(['sales', 'manager'], cur.salesEmail)}</select></div>
       <div class="field"><label>工程師</label><select name="engineerEmail"><option value="">（未指定）</option>${userOptions(['engineer'], cur.engineerEmail)}</select></div>
       <div class="field full"><label>地點</label><input name="place" value="${esc(cur.place || '')}"></div>
