@@ -193,7 +193,7 @@ td.wrap{white-space:pre-wrap;min-width:180px;max-width:360px}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13e</div>
+<div class="ver">版本 2026-10-13g</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -600,6 +600,14 @@ function customerForm(c, preset = {}, onCreated = null) {
         });
       } else {
         await updateDoc(doc(db, 'customers', cur.id), { ...data, needsCheck: false, updatedBy: me.email, updatedAt: serverTimestamp() });
+        // 區域改了：這位客戶的 Demo 紀錄也一起改區域（業務主管依區域看 Demo）
+        if ((data.region || '') !== (cur.region || '')) {
+          try {
+            const ds = (await getDocs(query(collection(db, 'demos'), where('customerId', '==', cur.id)))).docs;
+            for (let i = 0; i < ds.length; i += 200) { const b = writeBatch(db); ds.slice(i, i + 200).forEach(d => b.update(d.ref, { region: data.region || '', updatedBy: me.email, updatedAt: serverTimestamp() })); await b.commit(); }
+            recsCache.clear(); recCache.delete(cur.id);
+          } catch (e2) { toast('Demo 紀錄區域更新失敗：' + errMsg(e2), 8000); }
+        }
       }
       close();
       await syncCustomers();
@@ -697,9 +705,28 @@ const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
 const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
 
 function recCol(key, c) { return REC[key].top ? collection(db, key) : collection(db, 'customers', c.id, key); }
+// Demo 紀錄可看範圍：管理者全部；業務只看自己的業務 Demo；業務主管看自己＋負責區域的業務 Demo；工程師看全部工程師 Demo
+const seesSalesDemos = () => isAdmin() || ['sales', 'manager'].includes(me?.role);
+const seesEngDemos = () => isAdmin() || isEngineer() || !!me?.alsoEngineer;
+function demoSets() {
+  if (isAdmin()) return null;
+  const sets = [];
+  if (seesEngDemos()) sets.push([where('type', '==', 'engineer')]);
+  if (['sales', 'manager'].includes(me.role)) sets.push([where('type', '==', 'sales'), where('salesEmail', '==', me.email)]);
+  if (me.role === 'manager') userRegions(me).forEach(r => sets.push([where('type', '==', 'sales'), where('region', '==', r)]));
+  return sets;
+}
+async function queryDemos(extra = []) {
+  const sets = demoSets();
+  if (!sets) return (await getDocs(query(collection(db, 'demos'), ...extra))).docs;
+  const m = new Map();
+  for (const st of sets) (await getDocs(query(collection(db, 'demos'), ...st, ...extra))).docs.forEach(d => m.set(d.id, d));
+  return [...m.values()];
+}
 async function loadRecords(c) {
   const out = {};
   for (const k of REC_ORDER) {
+    if (k === 'demos') { out[k] = (await queryDemos([where('customerId', '==', c.id)])).map(d => ({ id: d.id, ...d.data() })); continue; }
     const q = REC[k].top ? query(collection(db, k), where('customerId', '==', c.id)) : recCol(k, c);
     out[k] = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
   }
@@ -1265,6 +1292,12 @@ const UNLINKED_ID = 'imp_unlinked';
 const toRow = d => ({ id: d.id, ...d.data(), customerId: d.data().customerId || d.ref.parent.parent?.id });
 // 「全部」：先讀本機快取，再只向伺服器抓有變動的，節省讀取額度
 async function loadRecsAll(col, full = false) {
+  if (col === 'demos' && !isAdmin()) { // 非管理者：只抓自己有權限的 Demo（本次登入期間暫存）
+    if (recsCache.has('demos|mine') && !full) return recsCache.get('demos|mine');
+    const rows = (await queryDemos()).map(toRow);
+    recsCache.set('demos|mine', rows);
+    return rows;
+  }
   const key = col + '|all';
   if (recsCache.has(key) && !full) return recsCache.get(key);
   const base = col === 'demos' ? collection(db, 'demos') : collectionGroup(db, col);
@@ -1285,6 +1318,7 @@ async function loadRecsAll(col, full = false) {
 }
 async function loadRecsMonth(col, ym) {
   if (ym === 'all') return loadRecsAll(col);
+  if (col === 'demos' && !isAdmin()) return (await loadRecsAll(col)).filter(r => String(r.date || '').startsWith(ym));
   const key = col + '|' + ym;
   if (recsCache.has(key)) return recsCache.get(key);
   const range = [where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')];
@@ -1299,7 +1333,8 @@ function recCustomer(r) {
 const linkify = t => esc(t).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 
 async function viewRecords() {
-  const tabs = RTABS.filter(t => t[2] === 'demos' || seesAllRecs());
+  const tabs = RTABS.filter(t => t[3] === 'sales' ? seesSalesDemos() : t[3] === 'engineer' ? seesEngDemos() : seesAllRecs());
+  if (!tabs.length) { app.innerHTML = '<div class="card"><h1>紀錄</h1><p class="muted">沒有可檢視的紀錄</p></div>'; return; }
   if (!tabs.find(t => t[0] === recsUI.tab)) recsUI.tab = tabs[0][0];
   const [tabKey, tabTitle, col, demoType] = tabs.find(t => t[0] === recsUI.tab);
   const R = REC[col];
@@ -1425,6 +1460,10 @@ async function viewImport() {
     <p>選擇 Claude 產生的 <strong>customers_import.json</strong>，先檢查內容，確認後再匯入。</p>
     <input type="file" id="impFile" accept=".json,application/json" style="max-width:420px">
     <div id="impBox"></div></div>
+  <div class="card"><h1>Demo 紀錄區域</h1>
+    <p class="muted">業務主管依「客戶區域」看 Demo 紀錄。補填或修改過客戶區域後，按這裡把舊的 Demo 紀錄區域更新成客戶目前的區域（只改不一樣的）。</p>
+    <div class="toolbar"><button class="ghost" id="dRegion">更新 Demo 紀錄區域</button></div><div id="dBox"></div>
+  </div>
   <div class="card"><h1>Google 日曆</h1>
     <h2>從 Google 日曆匯入行程</h2>
     <p class="muted">讀取同步日曆裡的活動，依標題裡的英文名字對應業務／工程師。已經匯入過的會自動略過；重複性活動會匯入，但不會再同步回 Google。</p>
@@ -1438,6 +1477,22 @@ async function viewImport() {
   const today0 = ymdOf(new Date());
   $('#gFrom').value = ymdOf(addDays(new Date(), -30)); $('#gTo').value = ymdOf(addDays(new Date(), 180)); $('#bFrom').value = today0;
   $('#gRead').addEventListener('click', gcalImportRead);
+  $('#dRegion').addEventListener('click', async () => {
+    const box = $('#dBox'); box.innerHTML = '<p class="muted">檢查中…</p>';
+    try {
+      const ds = (await getDocs(collection(db, 'demos'))).docs;
+      const jobs = ds.filter(d => { const c = customers.get(d.data().customerId); return c && (c.region || '') !== (d.data().region || ''); });
+      if (!jobs.length) { box.innerHTML = `<p>共 ${ds.length} 筆 Demo 紀錄，區域都已是最新。</p>`; return; }
+      if (!confirm(`共 ${ds.length} 筆 Demo 紀錄，其中 ${jobs.length} 筆的區域和客戶不同，要更新嗎？`)) { box.innerHTML = ''; return; }
+      for (let i = 0; i < jobs.length; i += 200) {
+        const b = writeBatch(db);
+        jobs.slice(i, i + 200).forEach(d => b.update(d.ref, { region: customers.get(d.data().customerId).region || '', updatedBy: me.email, updatedAt: serverTimestamp() }));
+        await b.commit();
+      }
+      recsCache.clear(); recCache.clear();
+      box.innerHTML = `<p>✅ 已更新 ${jobs.length} 筆 Demo 紀錄的區域。</p>`;
+    } catch (err) { box.innerHTML = `<p style="color:var(--danger)">${esc(errMsg(err))}</p>`; }
+  });
   $('#bRun').addEventListener('click', gcalBackfill);
   $('#impFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
