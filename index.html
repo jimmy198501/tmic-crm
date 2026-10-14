@@ -216,7 +216,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-13n</div>
+<div class="ver">版本 2026-10-14a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -437,6 +437,7 @@ async function softRefresh() {
 function renderNav() {
   const h = location.hash || '#/home';
   const items = [['#/home', '首頁'], ['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
+  if (isAdmin() || isEngineer()) items.push(['#/line', 'LINE']);
   if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
@@ -451,6 +452,7 @@ function route() {
   else if (page === 'home' || !page) viewHome();
   else if (page === 'calendar') viewCalendar();
   else if (page === 'records') viewRecords();
+  else if (page === 'line' && (isAdmin() || isEngineer())) viewLine();
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else if (page === 'import' && isAdmin()) viewImport();
@@ -548,7 +550,9 @@ function viewCustomer(id) {
     </div>
     ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
-  <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>`;
+  <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>
+  ${isAdmin() || isEngineer() ? '<div id="lineBox"></div>' : ''}`;
+  if (isAdmin() || isEngineer()) showLineForCustomer(c);
   app.querySelectorAll('a.navc').forEach(a => a.addEventListener('click', () => window.scrollTo(0, 0)));
   $('#edit')?.addEventListener('click', () => customerForm(c));
   $('#conv')?.addEventListener('click', () => convertToFormal(c));
@@ -1000,6 +1004,85 @@ $('#npanel').addEventListener('click', async e => {
   if (n?.date) { cal.cursor = n.date; }
   location.hash = '#/calendar'; route();
 });
+
+// ---------------- LINE 官方帳號詢問紀錄 ----------------
+const fmtAt = t => { const d = t?.toDate ? t.toDate() : new Date(t); return isNaN(d) ? '' : `${ymdOf(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+// 粗略判斷是不是我們自己人（名稱含 TMIC 或 CRM 人員的中英文名）——這是推論用的，不一定準
+const isStaffName = n => { const t = String(n || ''); if (!t) return false; if (/tmic/i.test(t)) return true;
+  return [...users.values()].some(u => (u.nameZh && u.nameZh.length >= 2 && t.includes(u.nameZh)) || (u.nameEn && new RegExp('(^|[^A-Za-z])' + u.nameEn.replace(/[.*+?^${}()|[\]\\]/g, '') + '([^A-Za-z]|$)', 'i').test(t))); };
+async function viewLine() {
+  app.innerHTML = '<div class="card"><h1>LINE 詢問紀錄</h1><p class="muted">載入中…</p></div>';
+  let chats;
+  try { chats = (await getDocs(collection(db, 'lineChats'))).docs.map(d => ({ id: d.id, ...d.data() })); }
+  catch (e) { app.innerHTML = `<div class="card"><h1>LINE 詢問紀錄</h1><p>載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!location.hash.startsWith('#/line')) return;
+  const onlyUn = viewLine.onlyUn ?? true;
+  const ms = t => t?.toMillis ? t.toMillis() : 0;
+  const list = chats.filter(x => !onlyUn || !x.customerId).sort((a, b) => ms(b.lastAt) - ms(a.lastAt));
+  const unN = chats.filter(x => !x.customerId).length;
+  app.innerHTML = `<div class="card">
+    <div class="toolbar"><h1 style="margin:0">LINE 詢問紀錄</h1><span class="spacer"></span>
+      <div class="seg"><button id="lUn" class="${onlyUn ? 'on' : ''}">⚠ 未連結客戶 ${unN}</button><button id="lAll" class="${onlyUn ? '' : 'on'}">全部 ${chats.length}</button></div></div>
+    <p class="muted">官方帳號收到的群組／一對一對話。每個對話連結一次客戶，之後的訊息就會出現在該客戶頁面。只記得到客戶（及群組裡同事用個人 LINE）傳的訊息，記不到在官方帳號後台回覆的內容。</p>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>對話名稱</th><th>類型</th><th>連結客戶</th><th>最後訊息</th><th>時間</th><th></th></tr></thead><tbody id="lbody">
+      ${list.map(x => { const c = customers.get(x.customerId); return `<tr data-id="${esc(x.id)}"><td>${esc(x.name)}</td><td>${x.type === 'group' ? '群組' : x.type === 'room' ? '多人聊天' : '一對一'}</td>
+        <td>${c ? `<a href="#/customer/${encodeURIComponent(c.id)}">${esc(custNo(c))} ${esc(c.name)}</a>` : '<span class="muted">⚠ 未連結</span>'}</td><td class="wrap">${esc(x.lastText || '')}</td><td>${esc(fmtAt(x.lastAt))}</td>
+        <td class="row-actions"><button class="ghost small" data-a="msgs">看訊息</button><button class="small ${c ? 'ghost' : ''}" data-a="link">${c ? '改客戶' : '連結客戶'}</button></td></tr>`; }).join('')}
+    </tbody></table></div>` : `<p class="muted">${onlyUn ? '沒有未連結的對話 👍' : '還沒有收到 LINE 訊息'}</p>`}</div>`;
+  $('#lUn').onclick = () => { viewLine.onlyUn = true; viewLine(); };
+  $('#lAll').onclick = () => { viewLine.onlyUn = false; viewLine(); };
+  $('#lbody')?.addEventListener('click', e => {
+    const a = e.target.dataset.a, id = e.target.closest('tr')?.dataset.id; if (!a || !id) return;
+    const x = chats.find(y => y.id === id);
+    if (a === 'msgs') lineMsgsDialog(x);
+    if (a === 'link') pickCustomer(async c => {
+      try {
+        await updateDoc(doc(db, 'lineChats', id), { customerId: c.id, customerName: c.name || '', linkedBy: me.email, linkedAt: serverTimestamp() });
+        toast(`已連結到 ${custNo(c)} ${c.name}`); viewLine();
+      } catch (err) { toast(errMsg(err)); }
+    });
+  });
+}
+async function lineMsgsDialog(x) {
+  let msgs;
+  try { msgs = (await getDocs(query(collection(db, 'lineMsgs'), where('chatId', '==', x.id)))).docs.map(d => d.data()); }
+  catch (e) { return toast(errMsg(e)); }
+  msgs.sort((a, b) => (a.at?.toMillis?.() || 0) - (b.at?.toMillis?.() || 0));
+  const dlg = document.createElement('dialog');
+  let last = '';
+  dlg.innerHTML = `<h1>${esc(x.name)}</h1><p class="muted">共 ${msgs.length} 則（只含客戶與群組成員傳的訊息）</p>
+    <div style="max-height:60vh;overflow:auto">${msgs.map(m => { const d = m.date !== last ? `<div class="muted" style="text-align:center;margin:10px 0">— ${esc(m.date)} —</div>` : ''; last = m.date;
+      return d + `<div style="margin:6px 0"><b style="color:${isStaffName(m.sender) ? 'var(--muted)' : 'var(--navy)'}">${esc(m.sender || '（未知）')}</b> <span class="muted">${esc(fmtAt(m.at).slice(11))}</span><div style="white-space:pre-wrap">${esc(m.text)}</div></div>`; }).join('') || '<p class="muted">沒有訊息</p>'}</div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button id="lc">關閉</button></div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('#lc').onclick = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.showModal();
+}
+async function showLineForCustomer(c) {
+  const box = $('#lineBox'); if (!box) return;
+  let chats = [], msgs = [];
+  try {
+    chats = (await getDocs(query(collection(db, 'lineChats'), where('customerId', '==', c.id)))).docs.map(d => ({ id: d.id, ...d.data() }));
+    for (let i = 0; i < chats.length; i += 30) msgs = msgs.concat((await getDocs(query(collection(db, 'lineMsgs'), where('chatId', 'in', chats.slice(i, i + 30).map(x => x.id))))).docs.map(d => d.data()));
+  } catch (e) { box.innerHTML = `<div class="card"><p class="muted">LINE 紀錄載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!$('#lineBox')) return;
+  if (!chats.length) { box.innerHTML = `<div class="card"><div class="sec-head"><h2>LINE 詢問</h2></div><p class="muted">這位客戶還沒有連結 LINE 對話，可到上方「LINE」頁連結。</p></div>`; return; }
+  const cust = msgs.filter(m => !isStaffName(m.sender));
+  const days = [...new Set(cust.map(m => m.date))].sort().reverse();
+  const y = String(new Date().getFullYear());
+  const byMonth = {}; days.forEach(d => { const k = d.slice(0, 7); byMonth[k] = (byMonth[k] || 0) + 1; });
+  box.innerHTML = `<div class="card"><div class="sec-head"><h2>LINE 詢問</h2><span class="muted">${chats.map(x => esc(x.name)).join('、')}</span></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+      <div class="field"><label>今年詢問天數</label><div class="val" style="font-size:22px;font-weight:700;color:var(--navy)">${days.filter(d => d.startsWith(y)).length} 天</div></div>
+      <div class="field"><label>累計詢問天數</label><div class="val" style="font-size:22px;font-weight:700;color:var(--navy)">${days.length} 天</div></div>
+      <div class="field"><label>客戶訊息數</label><div class="val" style="font-size:22px;font-weight:700;color:var(--navy)">${cust.length} 則</div></div>
+      <div class="field"><label>最近一次詢問</label><div class="val">${esc(days[0] || '—')}</div></div></div>
+    ${Object.keys(byMonth).length ? `<p class="muted" style="margin-top:12px">每月詢問天數：${Object.entries(byMonth).slice(0, 12).map(([k, n]) => `${k} <b>${n}</b> 天`).join('　')}</p>` : ''}
+    <div class="row-actions">${chats.map(x => `<button class="ghost small" data-chat="${esc(x.id)}">看「${esc(x.name)}」訊息</button>`).join('')}</div>
+    <p class="muted" style="margin-bottom:0">「詢問天數」＝客戶有傳訊息的天數；同事的訊息依名稱粗略排除，不一定完全準確。</p></div>`;
+  box.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => lineMsgsDialog(chats.find(x => x.id === b.dataset.chat)));
+}
 
 // ---------------- 個人首頁 ----------------
 async function viewHome() {
