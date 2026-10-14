@@ -142,6 +142,10 @@ select.fon{border-color:var(--purple);color:var(--purple);font-weight:500}
 .hitem.tent{border-left-style:dashed}
 .hitem .t{color:var(--muted);min-width:92px;white-space:nowrap}
 @media (max-width:900px){.hdays{grid-template-columns:1fr}}
+.lday{display:flex;align-items:center;gap:8px;margin:14px 0 6px;padding:6px 10px;border-bottom:2px solid var(--line);position:sticky;top:0;background:#fff;z-index:1}
+.lmsg{padding:8px 10px;border-radius:8px;margin:6px 0;background:#f7f8fc}
+.lmsg.off{background:#fafafa;color:#8a94a6}
+.lmsg .toolbar{gap:8px}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .priv::before{background:#7F1085}.legend .plain::before{display:none}
@@ -216,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-14a</div>
+<div class="ver">版本 2026-10-14c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1034,7 +1038,7 @@ async function viewLine() {
   $('#lbody')?.addEventListener('click', e => {
     const a = e.target.dataset.a, id = e.target.closest('tr')?.dataset.id; if (!a || !id) return;
     const x = chats.find(y => y.id === id);
-    if (a === 'msgs') lineMsgsDialog(x);
+    if (a === 'msgs') lineMsgsDialog(x, () => viewLine());
     if (a === 'link') pickCustomer(async c => {
       try {
         await updateDoc(doc(db, 'lineChats', id), { customerId: c.id, customerName: c.name || '', linkedBy: me.email, linkedAt: serverTimestamp() });
@@ -1043,20 +1047,66 @@ async function viewLine() {
     });
   });
 }
-async function lineMsgsDialog(x) {
+async function lineMsgsDialog(x, onChange) {
   let msgs;
-  try { msgs = (await getDocs(query(collection(db, 'lineMsgs'), where('chatId', '==', x.id)))).docs.map(d => d.data()); }
+  try { msgs = (await getDocs(query(collection(db, 'lineMsgs'), where('chatId', '==', x.id)))).docs.map(d => ({ id: d.id, ...d.data() })); }
   catch (e) { return toast(errMsg(e)); }
   msgs.sort((a, b) => (a.at?.toMillis?.() || 0) - (b.at?.toMillis?.() || 0));
   const dlg = document.createElement('dialog');
-  let last = '';
-  dlg.innerHTML = `<h1>${esc(x.name)}</h1><p class="muted">共 ${msgs.length} 則（只含客戶與群組成員傳的訊息）</p>
-    <div style="max-height:60vh;overflow:auto">${msgs.map(m => { const d = m.date !== last ? `<div class="muted" style="text-align:center;margin:10px 0">— ${esc(m.date)} —</div>` : ''; last = m.date;
-      return d + `<div style="margin:6px 0"><b style="color:${isStaffName(m.sender) ? 'var(--muted)' : 'var(--navy)'}">${esc(m.sender || '（未知）')}</b> <span class="muted">${esc(fmtAt(m.at).slice(11))}</span><div style="white-space:pre-wrap">${esc(m.text)}</div></div>`; }).join('') || '<p class="muted">沒有訊息</p>'}</div>
-    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button id="lc">關閉</button></div>`;
+  dlg.style.maxWidth = '860px';
+  let changed = false;
+  const draw = () => {
+    let last = '';
+    dlg.innerHTML = `<div class="toolbar"><h1 style="margin:0" id="lName">${esc(x.name)}</h1><button class="ghost small" id="lRen">改名稱</button></div>
+      <p class="muted">共 ${msgs.length} 則。可編輯內容、刪除，或設為「不算詢問」（不計入客戶詢問天數）。</p>
+      <div style="max-height:60vh;overflow:auto" id="lList">${msgs.map(m => { const d = m.date !== last ? `<div class="lday"><b>${esc(m.date)}（${WD[toDate(m.date).getDay()]}）</b><span class="spacer"></span><span class="muted">處理同事</span>
+          <select class="lhand" data-date="${esc(m.date)}" style="width:auto"><option value="">（未註記）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], (x.handlers || {})[m.date] || '')}</select></div>` : ''; last = m.date;
+        const off = m.excluded || isStaffName(m.sender);
+        return d + `<div class="lmsg ${off ? 'off' : ''}" data-id="${esc(m.id)}"><div class="toolbar" style="margin:0"><b>${esc(m.sender || '（未知）')}</b><span class="muted">${esc(fmtAt(m.at).slice(11))}</span>
+          ${m.excluded ? '<span class="pill tent">不算詢問</span>' : isStaffName(m.sender) ? '<span class="pill">同事</span>' : ''}${m.edited ? '<span class="muted">（已編輯）</span>' : ''}<span class="spacer"></span>
+          <button class="ghost small" data-a="edit">編輯</button><button class="ghost small" data-a="ex">${m.excluded ? '算詢問' : '不算詢問'}</button><button class="danger small" data-a="del">刪除</button></div>
+          <div class="ltext" style="white-space:pre-wrap">${esc(m.text)}</div></div>`; }).join('') || '<p class="muted">沒有訊息</p>'}</div>
+      <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button id="lc">關閉</button></div>`;
+  };
+  draw();
   document.body.appendChild(dlg);
-  dlg.querySelector('#lc').onclick = () => { dlg.close(); dlg.remove(); };
-  dlg.addEventListener('cancel', () => dlg.remove());
+  const done = () => { dlg.close(); dlg.remove(); if (changed) onChange?.(); };
+  dlg.addEventListener('cancel', e => { e.preventDefault(); done(); });
+  dlg.addEventListener('change', async e => {
+    const sel = e.target.closest('.lhand'); if (!sel) return;
+    try {
+      await updateDoc(doc(db, 'lineChats', x.id), { ['handlers.' + sel.dataset.date]: sel.value });
+      x.handlers = { ...(x.handlers || {}), [sel.dataset.date]: sel.value }; changed = true; toast('已註記處理同事');
+    } catch (err) { toast(errMsg(err)); }
+  });
+  dlg.addEventListener('click', async e => {
+    if (e.target.id === 'lc') return done();
+    if (e.target.id === 'lRen') {
+      const n = prompt('對話名稱', x.name); if (n === null || !n.trim()) return;
+      try { await updateDoc(doc(db, 'lineChats', x.id), { name: n.trim() }); x.name = n.trim(); changed = true; draw(); } catch (err) { toast(errMsg(err)); }
+      return;
+    }
+    const a = e.target.dataset.a, box = e.target.closest('.lmsg'); if (!a || !box) return;
+    const m = msgs.find(y => y.id === box.dataset.id);
+    const stamp = { editedBy: me.email, editedAt: serverTimestamp() };
+    try {
+      if (a === 'edit') {
+        const t = box.querySelector('.ltext');
+        t.outerHTML = `<textarea class="ledit" rows="${Math.min(10, String(m.text).split('\n').length + 1)}">${esc(m.text)}</textarea><div class="row-actions" style="justify-content:flex-end;margin-top:6px"><button class="ghost small" data-a="cancel">取消</button><button class="small" data-a="save">儲存</button></div>`;
+        box.querySelector('[data-a=edit]').disabled = true;
+      }
+      if (a === 'cancel') draw();
+      if (a === 'save') {
+        const v = box.querySelector('.ledit').value.trim();
+        await updateDoc(doc(db, 'lineMsgs', m.id), { text: v, edited: true, ...stamp }); m.text = v; m.edited = true; changed = true; draw();
+      }
+      if (a === 'ex') { await updateDoc(doc(db, 'lineMsgs', m.id), { excluded: !m.excluded, ...stamp }); m.excluded = !m.excluded; changed = true; draw(); }
+      if (a === 'del') {
+        if (!confirm('確定刪除這則訊息？')) return;
+        await deleteDoc(doc(db, 'lineMsgs', m.id)); msgs = msgs.filter(y => y.id !== m.id); changed = true; draw();
+      }
+    } catch (err) { toast(errMsg(err)); }
+  });
   dlg.showModal();
 }
 async function showLineForCustomer(c) {
@@ -1068,7 +1118,7 @@ async function showLineForCustomer(c) {
   } catch (e) { box.innerHTML = `<div class="card"><p class="muted">LINE 紀錄載入失敗：${esc(errMsg(e))}</p></div>`; return; }
   if (!$('#lineBox')) return;
   if (!chats.length) { box.innerHTML = `<div class="card"><div class="sec-head"><h2>LINE 詢問</h2></div><p class="muted">這位客戶還沒有連結 LINE 對話，可到上方「LINE」頁連結。</p></div>`; return; }
-  const cust = msgs.filter(m => !isStaffName(m.sender));
+  const cust = msgs.filter(m => !m.excluded && !isStaffName(m.sender));
   const days = [...new Set(cust.map(m => m.date))].sort().reverse();
   const y = String(new Date().getFullYear());
   const byMonth = {}; days.forEach(d => { const k = d.slice(0, 7); byMonth[k] = (byMonth[k] || 0) + 1; });
@@ -1078,10 +1128,17 @@ async function showLineForCustomer(c) {
       <div class="field"><label>累計詢問天數</label><div class="val" style="font-size:22px;font-weight:700;color:var(--navy)">${days.length} 天</div></div>
       <div class="field"><label>客戶訊息數</label><div class="val" style="font-size:22px;font-weight:700;color:var(--navy)">${cust.length} 則</div></div>
       <div class="field"><label>最近一次詢問</label><div class="val">${esc(days[0] || '—')}</div></div></div>
+    ${(() => {
+      const cnt = {}; let none = 0;
+      chats.forEach(ch => [...new Set(cust.filter(m => m.chatId === ch.id).map(m => m.date))].forEach(d => { const h = (ch.handlers || {})[d]; if (h) cnt[h] = (cnt[h] || 0) + 1; else none++; }));
+      const parts = Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(([e, n]) => `${esc(salesLabel(e))} <b>${n}</b> 天`);
+      if (none) parts.push(`未註記 <b>${none}</b> 天`);
+      return parts.length ? `<p class="muted" style="margin-top:12px">處理同事：${parts.join('　')}</p>` : '';
+    })()}
     ${Object.keys(byMonth).length ? `<p class="muted" style="margin-top:12px">每月詢問天數：${Object.entries(byMonth).slice(0, 12).map(([k, n]) => `${k} <b>${n}</b> 天`).join('　')}</p>` : ''}
     <div class="row-actions">${chats.map(x => `<button class="ghost small" data-chat="${esc(x.id)}">看「${esc(x.name)}」訊息</button>`).join('')}</div>
     <p class="muted" style="margin-bottom:0">「詢問天數」＝客戶有傳訊息的天數；同事的訊息依名稱粗略排除，不一定完全準確。</p></div>`;
-  box.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => lineMsgsDialog(chats.find(x => x.id === b.dataset.chat)));
+  box.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => lineMsgsDialog(chats.find(x => x.id === b.dataset.chat), () => showLineForCustomer(c)));
 }
 
 // ---------------- 個人首頁 ----------------
