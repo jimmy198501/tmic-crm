@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-15b</div>
+<div class="ver">版本 2026-10-15c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -927,7 +927,7 @@ function recordForm(k, c, r, preset = {}) {
   const custLine = () => `<span id="custName">${esc(custNo(target))}　${esc(target.name)}</span>${target.id !== c.id ? ' <span class="tag potential">將更換</span>' : ''}`;
   const editCreator = !isNew && k === 'issues' && (r.source === 'ironcad' || r.createdBy === 'system') && (isAdmin() || isEngineer());
   dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted" id="custLine">${custLine()}</p>${!isNew && canMoveRec(k) ? '<p><button type="button" class="ghost small" id="chgCust">更換連結客戶</button></p>' : ''}
-    <div class="grid">${R.fields.map(field).join('')}${editCreator ? `<div class="field"><label>建立者</label><select name="__creator"><option value="system" ${r.createdBy === 'system' ? 'selected' : ''}>system（原廠自動匯入）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], r.createdBy)}</select></div>` : ''}</div>
+    <div class="grid">${R.fields.map(field).join('')}${editCreator ? `<div class="field"><label>建立者</label><select name="__creator"><option value="system" ${r.createdBy === 'system' ? 'selected' : ''}>system（原廠自動匯入）</option>${userOptions(['engineer'], r.createdBy)}</select></div>` : ''}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
   document.body.appendChild(dlg);
   const form = dlg.querySelector('#rf');
