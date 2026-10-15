@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-15d</div>
+<div class="ver">版本 2026-10-15e</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1534,6 +1534,7 @@ function scheduleForm(r, preset = {}) {
       <div class="field full"><label>內容</label><textarea name="content" rows="8" placeholder="客戶名稱、聯絡窗口、電話、備註…">${esc(cur.content || '')}</textarea></div>
       <div class="field full">
         <div class="checks"><label><input type="checkbox" name="private" ${cur._private ? 'checked' : ''} ${!isNew && !r._private && r.createdBy !== me.email ? 'disabled' : ''}>🔒 私人行程（只有自己看得到；不寄信、不通知、不同步 Google 日曆）</label></div>
+        ${!isNew && !r._private && isAdmin() ? `<div class="field" style="max-width:360px;margin-bottom:10px"><label>建立者（管理者可改）</label><select name="__creator">${userOptions(['sales', 'manager', 'engineer', 'admin'], r.createdBy)}</select></div>` : ''}
         <div class="checks" style="margin-top:6px" id="tentRow"><label><input type="checkbox" name="tentative" ${cur.tentative ? 'checked' : ''}>暫定（先不寄信、不通知、不同步 Google；之後取消勾選＝確定，那時才寄信）</label></div>
       </div>
     </div>
@@ -1586,7 +1587,7 @@ function scheduleForm(r, preset = {}) {
       if (isNew || wasPriv) {
         id = (await addDoc(collection(db, 'schedules'), { ...data, ...newDoc })).id;
         if (wasPriv) await deleteDoc(doc(db, 'privateSchedules', r.id));
-      } else await updateDoc(doc(db, 'schedules', r.id), { ...data, ...stamp });
+      } else await updateDoc(doc(db, 'schedules', r.id), { ...data, ...(form.__creator?.value ? { createdBy: form.__creator.value } : {}), ...stamp });
       close(); toast(data.tentative ? '已儲存（暫定，未通知）' : '已儲存'); refreshSchedViews();
       if (data.tentative) {
         if (!isNew && !wasPriv && r.gcalId) { // 改回暫定：從 Google 日曆拿掉
@@ -1856,6 +1857,9 @@ async function viewImport() {
     <p class="muted">讀取同步日曆裡的活動，依標題裡的英文名字對應業務／工程師。已經匯入過的會自動略過；重複性活動會匯入，但不會再同步回 Google。</p>
     <div class="toolbar"><input type="date" id="gFrom" style="max-width:180px"> ～ <input type="date" id="gTo" style="max-width:180px"><button id="gRead">讀取</button></div>
     <div id="gBox"></div>
+    <h2 style="margin-top:24px">匯入行程的建立者</h2>
+    <p class="muted">從 Google 日曆匯入的行程，建立者都是匯入的人。按這裡會把建立者改成行程上的業務（沒有業務就用工程師），之後他們就能自己修改、刪除。沒有填業務／工程師的不會變動。</p>
+    <div class="toolbar"><button class="ghost" id="gOwner">更新匯入行程的建立者</button></div><div id="gOwnerBox"></div>
     <h2 style="margin-top:24px">把 CRM 行程補同步到 Google 日曆</h2>
     <p class="muted">同步功能上線前建立的行程，按這裡補同步（只處理還沒同步過的）。</p>
     <div class="toolbar">從 <input type="date" id="bFrom" style="max-width:180px"> 之後的行程 <button id="bRun" class="ghost">開始同步</button></div>
@@ -1881,6 +1885,22 @@ async function viewImport() {
     } catch (err) { box.innerHTML = `<p style="color:var(--danger)">${esc(errMsg(err))}</p>`; }
   });
   $('#bRun').addEventListener('click', gcalBackfill);
+  $('#gOwner').addEventListener('click', async () => {
+    const box = $('#gOwnerBox'); box.innerHTML = '<p class="muted">檢查中…</p>';
+    try {
+      const ds = (await getDocs(query(collection(db, 'schedules'), where('source', '==', 'gcal')))).docs;
+      const jobs = ds.map(d => [d, d.data().salesEmail || d.data().engineerEmail || '']).filter(([d, who]) => who && who !== d.data().createdBy);
+      if (!jobs.length) { box.innerHTML = `<p>共 ${ds.length} 筆匯入的行程，沒有需要更新的。</p>`; return; }
+      if (!confirm(`共 ${ds.length} 筆匯入的行程，其中 ${jobs.length} 筆要把建立者改成行程上的業務／工程師，確定嗎？`)) { box.innerHTML = ''; return; }
+      for (let i = 0; i < jobs.length; i += 200) {
+        const b = writeBatch(db);
+        jobs.slice(i, i + 200).forEach(([d, who]) => b.update(d.ref, { createdBy: who, updatedBy: me.email, updatedAt: serverTimestamp() }));
+        await b.commit();
+      }
+      schedCache.clear(); allSchedCache = null;
+      box.innerHTML = `<p>✅ 已更新 ${jobs.length} 筆行程的建立者。</p>`;
+    } catch (err) { box.innerHTML = `<p style="color:var(--danger)">${esc(errMsg(err))}</p>`; }
+  });
   $('#impFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
     let data;
