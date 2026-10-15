@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-14c</div>
+<div class="ver">版本 2026-10-15b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -767,8 +767,8 @@ const REC = {
   issues: {
     title: '問題追蹤', kind: 'issue',
     canAdd: () => isAdmin() || isEngineer(), canEdit: () => isAdmin() || isEngineer(), canDel: () => isAdmin(),
-    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['ticketNo', '原廠單號', 'text'], ['reporterEmail', '回報者', 'user', false, ['engineer']], ['status', '狀態', 'list', false, ['發問中', '未解決', '已解決', '未來新增', '近期觀察', '不解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
-    cols: [['date', '日期'], ['ticketNo', '原廠單號', r => r.ticketNo ? '#' + r.ticketNo : ''], ['title', '名稱'], ['reporterEmail', '回報者', r => salesLabel(r.reporterEmail)], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
+    fields: [['date', '日期', 'date', true], ['title', '名稱', 'text', true], ['ticketNo', '原廠單號', 'text'], ['status', '狀態', 'list', false, ['發問中', '未解決', '已解決', '未來新增', '近期觀察', '不解決']], ['content', '內容', 'textarea', false, null, true], ['solution', '解決方式', 'textarea', false, null, true], ['link', '雲端連結', 'text', false, null, true], ['files', '檔案', 'files', false, null, true]],
+    cols: [['date', '日期'], ['ticketNo', '原廠單號', r => r.ticketNo ? '#' + r.ticketNo : ''], ['title', '名稱'], ['status', '狀態'], ['content', '內容', null, true], ['solution', '解決方式', null, true], ['link', '雲端連結'], ['files', '檔案']]
   },
   installs: {
     title: '工程師安裝紀錄',
@@ -778,6 +778,7 @@ const REC = {
   }
 };
 const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
+const canMoveRec = k => isAdmin() || (isEngineer() && ['issues', 'installs'].includes(k)); // 工程師可替問題追蹤、安裝紀錄改連結客戶
 const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
 
 function recCol(key, c) { return REC[key].top ? collection(db, key) : collection(db, 'customers', c.id, key); }
@@ -924,8 +925,9 @@ function recordForm(k, c, r, preset = {}) {
   const dlg = document.createElement('dialog');
   let target = c; // 管理者可在編輯時更換連結客戶
   const custLine = () => `<span id="custName">${esc(custNo(target))}　${esc(target.name)}</span>${target.id !== c.id ? ' <span class="tag potential">將更換</span>' : ''}`;
-  dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted" id="custLine">${custLine()}</p>${!isNew && isAdmin() ? '<p><button type="button" class="ghost small" id="chgCust">更換連結客戶</button></p>' : ''}
-    <div class="grid">${R.fields.map(field).join('')}</div>
+  const editCreator = !isNew && k === 'issues' && (r.source === 'ironcad' || r.createdBy === 'system') && (isAdmin() || isEngineer());
+  dlg.innerHTML = `<form id="rf"><h1>${isNew ? '新增' : '編輯'}${R.title}</h1><p class="muted" id="custLine">${custLine()}</p>${!isNew && canMoveRec(k) ? '<p><button type="button" class="ghost small" id="chgCust">更換連結客戶</button></p>' : ''}
+    <div class="grid">${R.fields.map(field).join('')}${editCreator ? `<div class="field"><label>建立者</label><select name="__creator"><option value="system" ${r.createdBy === 'system' ? 'selected' : ''}>system（原廠自動匯入）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], r.createdBy)}</select></div>` : ''}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end"><button type="button" class="ghost" id="cancel">取消</button><button type="submit" id="save">儲存</button></div></form>`;
   document.body.appendChild(dlg);
   const form = dlg.querySelector('#rf');
@@ -963,6 +965,7 @@ function recordForm(k, c, r, preset = {}) {
       if (R.fields.some(x => x[2] === 'files')) data.files = files;
       if (R.top) Object.assign(data, { customerId: target.id, customerName: target.name || '', customerNo: custNo(target), region: target.region || '' });
       if (k === 'demos' && cur.scheduleId) data.scheduleId = cur.scheduleId;
+      if (editCreator && form.__creator) data.createdBy = form.__creator.value || 'system';
       if (k === 'demos' && !isAdmin() && !demoTypes().includes(data.type)) throw new Error('你不能填寫這種 Demo 紀錄');
       if (k === 'schedules' && data.endTime && data.endTime < data.startTime) throw new Error('結束時間不能早於開始時間');
       let newId = null;
@@ -972,6 +975,7 @@ function recordForm(k, c, r, preset = {}) {
         const { id: _id, customerId: _cid, ...old } = r;
         const b = writeBatch(db);
         b.set(doc(recCol(k, target), r.id), { ...old, ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+        b.set(doc(db, 'recMoves', r.id), { col: k, from: c.id, to: target.id, by: me.email, at: serverTimestamp() });
         b.delete(doc(recCol(k, c), r.id));
         await b.commit();
       }
@@ -1714,7 +1718,7 @@ async function viewRecords() {
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆${isDemoTab && (recsUI.opp || recsUI.period || recsUI.prod) ? `（已篩選：${[['商機', recsUI.opp], ['期程', recsUI.period], ['介紹產品', recsUI.prod]].filter(x => x[1]).map(([t, v]) => `${t}＝${v === '__none' ? '未填' : esc(v)}`).join('、')}）` : ''}</div>
     ${list.length ? `<div class="tablewrap"><table><thead><tr id="rhead">${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th><th></th></tr></thead>
     <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}">${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td>
-      <td class="row-actions">${isAdmin() ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
+      <td class="row-actions">${canMoveRec(col) ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
   </div>`;
   const thisMonth = () => new Date().toLocaleDateString('sv-SE').slice(0, 7);
   const moveM = n => { const d = new Date(y, m - 1 + n, 1); recsUI.ym = d.toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
@@ -1754,6 +1758,7 @@ async function viewRecords() {
           const { id, customerId, ...data } = it.r;
           const b = writeBatch(db);
           b.set(doc(db, 'customers', c2.id, col, id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
+          b.set(doc(db, 'recMoves', id), { col, from: it.r.customerId, to: c2.id, by: me.email, at: serverTimestamp() });
           b.delete(doc(db, 'customers', it.r.customerId, col, id));
           await b.commit();
         }
