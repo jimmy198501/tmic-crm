@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-15c</div>
+<div class="ver">版本 2026-10-15d</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -778,6 +778,13 @@ const REC = {
   }
 };
 const REC_ORDER = ['demos', 'purchases', 'issues', 'installs'];
+// 子紀錄（採購／問題追蹤／安裝）改連結客戶：先標記要搬去哪 → 在新客戶建立 → 刪除舊的（權限規則會確認新位置已存在）
+async function moveSubRec(col, fromCid, toCid, id, data) {
+  await updateDoc(doc(db, 'customers', fromCid, col, id), { movingTo: toCid });
+  const { movingTo, ...clean } = data;
+  await setDoc(doc(db, 'customers', toCid, col, id), { ...clean, updatedBy: me.email, updatedAt: serverTimestamp() });
+  await deleteDoc(doc(db, 'customers', fromCid, col, id));
+}
 const canMoveRec = k => isAdmin() || (isEngineer() && ['issues', 'installs'].includes(k)); // 工程師可替問題追蹤、安裝紀錄改連結客戶
 const recCache = new Map(); // customerId -> {demos:[], purchases:[], ...}
 
@@ -973,11 +980,7 @@ function recordForm(k, c, r, preset = {}) {
       else if (!R.top && target.id !== c.id) {
         // 子紀錄換客戶：搬到新客戶底下，刪除舊的
         const { id: _id, customerId: _cid, ...old } = r;
-        const b = writeBatch(db);
-        b.set(doc(recCol(k, target), r.id), { ...old, ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-        b.set(doc(db, 'recMoves', r.id), { col: k, from: c.id, to: target.id, by: me.email, at: serverTimestamp() });
-        b.delete(doc(recCol(k, c), r.id));
-        await b.commit();
+        await moveSubRec(k, c.id, target.id, r.id, { ...old, ...data });
       }
       else await updateDoc(doc(recCol(k, c), r.id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
       close(); toast(target.id !== c.id ? `已儲存，並改連結到 ${target.name}` : '已儲存');
@@ -1756,11 +1759,7 @@ async function viewRecords() {
           await updateDoc(doc(db, 'demos', it.r.id), { customerId: c2.id, customerName: c2.name || '', customerNo: custNo(c2), region: c2.region || '', updatedBy: me.email, updatedAt: serverTimestamp() });
         } else {
           const { id, customerId, ...data } = it.r;
-          const b = writeBatch(db);
-          b.set(doc(db, 'customers', c2.id, col, id), { ...data, updatedBy: me.email, updatedAt: serverTimestamp() });
-          b.set(doc(db, 'recMoves', id), { col, from: it.r.customerId, to: c2.id, by: me.email, at: serverTimestamp() });
-          b.delete(doc(db, 'customers', it.r.customerId, col, id));
-          await b.commit();
+          await moveSubRec(col, it.r.customerId, c2.id, id, data);
         }
         toast('已改連結客戶'); recCache.delete(it.r.customerId); recCache.delete(c2.id); recsCache.clear(); viewRecords();
       } catch (err) { toast(errMsg(err)); }
