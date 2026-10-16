@@ -146,6 +146,20 @@ select.fon{border-color:var(--purple);color:var(--purple);font-weight:500}
 .lmsg{padding:8px 10px;border-radius:8px;margin:6px 0;background:#f7f8fc}
 .lmsg.off{background:#fafafa;color:#8a94a6}
 .lmsg .toolbar{gap:8px}
+.marq{background:#FFF6E0;border-bottom:1px solid #F2C46B;color:#5a4300;font-size:14px;overflow:hidden;white-space:nowrap;padding:7px 0}
+.marq span#marqText{display:inline-block;padding-left:100%;animation:mq 25s linear infinite}
+.marq:hover span#marqText{animation-play-state:paused}
+.marq a{color:#5a4300;text-decoration:none;font-weight:500}
+@keyframes mq{to{transform:translateX(-100%)}}
+.board{border:1px solid var(--line);border-radius:12px;background:#fff;padding:14px 16px;margin-bottom:14px}
+.post{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.post:last-child{border-bottom:0}
+.post:hover b{text-decoration:underline}
+.post .pbody{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ptag{font-size:12px;border-radius:999px;padding:2px 10px;height:fit-content;white-space:nowrap;font-weight:500}
+.ptag.new{background:#e5e8f5;color:var(--navy)}.ptag.imp{background:#fde8e8;color:#c0392b}.ptag.info{background:#eef6ee;color:#2E7D32}
+.post .d{color:var(--muted);font-size:12px;white-space:nowrap}
+.unread{width:8px;height:8px;border-radius:50%;background:var(--purple);display:inline-block;margin-right:6px;vertical-align:middle}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .legend .north::before{background:#3F51B5}.legend .midsouth::before{background:#2E7D32}.legend .leave::before{background:#D32F2F}.legend .holiday::before{background:#F6C026}.legend .none::before{background:#78849E}.legend .priv::before{background:#7F1085}.legend .plain::before{display:none}
@@ -218,9 +232,10 @@ body.resizing{cursor:col-resize;user-select:none}
   <div class="me"><div class="bellwrap"><button class="ghost bell" id="bell" title="通知">🔔<span class="badge hidden" id="badge"></span></button><div class="panel hidden" id="npanel"></div></div><span id="meName"></span><button class="ghost" id="logout">登出</button></div>
   </div>
 </header>
+<div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-16d</div>
+<div class="ver">版本 2026-10-16e</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -347,7 +362,7 @@ function errMsg(e) {
 
 // ---------------- 登入 ----------------
 function viewLogin(msg) {
-  $('#hdr').classList.add('hidden');
+  $('#hdr').classList.add('hidden'); $('#marq')?.classList.add('hidden');
   app.innerHTML = `<div class="center"><div class="card login">
     <div class="brand">tmic<span class="dot">.</span><small>CRM</small></div>
     <p class="muted">明日國際 客戶管理系統</p>
@@ -395,7 +410,8 @@ onAuthStateChanged(auth, async u => {
   try { switched = localStorage.getItem('crm_last_user') !== email; localStorage.setItem('crm_last_user', email); } catch (e) { switched = true; }
   try { await syncCustomers(switched); } catch (e) { toast('客戶資料載入不完整：' + errMsg(e), 10000); }
   privCache = null;
-  try { const pf = await getDoc(doc(db, 'prefs', email)); cal.weekStart = pf.exists() && pf.data().weekStart === 1 ? 1 : 0; } catch (e) { cal.weekStart = 0; }
+  try { const pf = await getDoc(doc(db, 'prefs', email)); cal.weekStart = pf.exists() && pf.data().weekStart === 1 ? 1 : 0; annRead = (pf.exists() && pf.data().annRead) || {}; } catch (e) { cal.weekStart = 0; }
+  annCache = null; await loadAnn();
   route();
   timer = setInterval(() => { if (document.visibilityState === "visible") softRefresh(); }, 5 * 60 * 1000); // 視窗沒在看時不更新，省讀取次數
 });
@@ -1168,6 +1184,115 @@ async function showLineForCustomer(c) {
   box.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => lineMsgsDialog(chats.find(x => x.id === b.dataset.chat), () => showLineForCustomer(c)));
 }
 
+// ---------------- 公布欄／跑馬燈 ----------------
+const ANN_TAG = { imp: '重要', new: '新功能', info: '一般' };
+let annCache = null, annRead = {};
+async function loadAnn(force = false) {
+  if (annCache && !force) return annCache;
+  try { annCache = (await getDocs(collection(db, 'announcements'))).docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { annCache = []; }
+  const ms = t => t?.toMillis ? t.toMillis() : 0;
+  annCache.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || ms(b.createdAt) - ms(a.createdAt));
+  renderMarquee();
+  return annCache;
+}
+function renderMarquee() {
+  const box = $('#marq'); if (!box) return;
+  const today = ymdOf(new Date());
+  const items = (annCache || []).filter(a => a.marquee && (!a.marqueeUntil || a.marqueeUntil >= today));
+  box.classList.toggle('hidden', !items.length || !me);
+  if (!items.length) return;
+  const t = $('#marqText');
+  t.innerHTML = items.map(a => `<a href="#/home" data-ann="${esc(a.id)}">📢 ${a.tag === 'imp' ? '【重要】' : a.tag === 'new' ? '🆕 ' : ''}${esc(a.marqueeText || a.title)}</a>`).join('<span class="msep">　　　</span>');
+  t.style.animationDuration = Math.max(15, Math.round(t.textContent.length / 4)) + 's';
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('#marqText [data-ann]'); if (!a) return;
+  e.preventDefault(); const x = (annCache || []).find(y => y.id === a.dataset.ann); if (x) annDetail(x);
+});
+const annUnread = a => !annRead[a.id];
+async function markAnnRead(ids) {
+  const add = ids.filter(id => !annRead[id]); if (!add.length) return;
+  add.forEach(id => { annRead[id] = true; });
+  try { await setDoc(doc(db, 'prefs', me.email), { annRead }, { merge: true }); } catch (e) { /* 記不住已讀也沒關係 */ }
+}
+const annDate = a => { const d = a.createdAt?.toDate ? a.createdAt.toDate() : null; return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; };
+const annRow = a => `<div class="post" data-ann="${esc(a.id)}"><span class="ptag ${esc(a.tag || 'info')}">${ANN_TAG[a.tag] || '一般'}</span>
+  <div style="flex:1;min-width:0"><b>${annUnread(a) ? '<span class="unread"></span>' : ''}${a.pinned ? '📌 ' : ''}${esc(a.title)}</b><div class="muted pbody">${esc(a.body || '')}</div></div>
+  <span class="d">${esc(annDate(a))} · ${esc((users.get(a.createdBy)?.nameZh) || '')}</span></div>`;
+function annDetail(a) {
+  markAnnRead([a.id]);
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<div class="toolbar"><span class="ptag ${esc(a.tag || 'info')}">${ANN_TAG[a.tag] || '一般'}</span><h1 style="margin:0">${a.pinned ? '📌 ' : ''}${esc(a.title)}</h1></div>
+    <p class="muted">${esc(annDate(a))} · ${esc(salesLabel(a.createdBy))}${a.marquee ? `　·　跑馬燈${a.marqueeUntil ? '顯示到 ' + esc(a.marqueeUntil) : '持續顯示'}` : ''}</p>
+    <div style="white-space:pre-wrap;line-height:1.8">${linkify(a.body || '')}</div>
+    <div class="row-actions" style="margin-top:20px;justify-content:flex-end">${isAdmin() ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); if (!location.hash || location.hash.startsWith('#/home')) viewHome(); };
+  dlg.addEventListener('cancel', e => { e.preventDefault(); close(); });
+  dlg.addEventListener('click', async e => {
+    const act = e.target.dataset.a; if (!act) return;
+    if (act === 'close') close();
+    if (act === 'edit') { dlg.close(); dlg.remove(); annForm(a); }
+    if (act === 'del') {
+      if (!confirm('確定刪除這則公告？')) return;
+      try { await deleteDoc(doc(db, 'announcements', a.id)); await loadAnn(true); toast('已刪除'); close(); } catch (err) { toast(errMsg(err)); }
+    }
+  });
+  dlg.showModal();
+}
+function annList() {
+  const list = annCache || [];
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<div class="toolbar"><h1 style="margin:0">📌 公布欄</h1><span class="spacer"></span><button class="ghost small" data-a="readall">全部標為已讀</button></div>
+    <div style="max-height:65vh;overflow:auto">${list.map(annRow).join('') || '<p class="muted">還沒有公告</p>'}</div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button data-a="close">關閉</button></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); viewHome(); };
+  dlg.addEventListener('cancel', e => { e.preventDefault(); close(); });
+  dlg.addEventListener('click', async e => {
+    if (e.target.dataset.a === 'close') return close();
+    if (e.target.dataset.a === 'readall') { await markAnnRead(list.map(a => a.id)); dlg.close(); dlg.remove(); annList(); return; }
+    const row = e.target.closest('[data-ann]'); if (!row) return;
+    const a = list.find(y => y.id === row.dataset.ann); dlg.close(); dlg.remove(); annDetail(a);
+  });
+  dlg.showModal();
+}
+function annForm(a) {
+  const isNew = !a; const cur = a || { tag: 'info', marquee: false, pinned: false };
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form id="af"><h1>${isNew ? '發布公告' : '編輯公告'}</h1>
+    <div class="grid">
+      <div class="field"><label>分類</label><select name="tag">${Object.entries(ANN_TAG).map(([k, t]) => `<option value="${k}" ${cur.tag === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>　</label><div class="checks"><label><input type="checkbox" name="pinned" ${cur.pinned ? 'checked' : ''}>📌 置頂</label></div></div>
+      <div class="field full"><label>標題 *</label><input name="title" value="${esc(cur.title || '')}"></div>
+      <div class="field full"><label>內容</label><textarea name="body" rows="6">${esc(cur.body || '')}</textarea></div>
+      <div class="field full"><div class="checks"><label><input type="checkbox" name="marquee" ${cur.marquee ? 'checked' : ''}>📢 同時顯示在跑馬燈（所有頁面最上方）</label></div></div>
+      <div class="field full mq"><label>跑馬燈文字（留空＝用標題）</label><input name="marqueeText" value="${esc(cur.marqueeText || '')}"></div>
+      <div class="field mq"><label>跑馬燈顯示到（留空＝一直顯示）</label><input type="date" name="marqueeUntil" value="${esc(cur.marqueeUntil || '')}"></div>
+    </div>
+    <div class="row-actions" style="margin-top:20px;justify-content:flex-end"><button type="button" class="ghost" id="ac">取消</button><button type="submit">${isNew ? '發布' : '儲存'}</button></div></form>`;
+  document.body.appendChild(dlg);
+  const f = dlg.querySelector('#af');
+  const tog = () => dlg.querySelectorAll('.mq').forEach(el => el.classList.toggle('hidden', !f.marquee.checked));
+  f.marquee.addEventListener('change', tog); tog();
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#ac').onclick = close;
+  dlg.addEventListener('cancel', () => dlg.remove());
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = { tag: f.tag.value, pinned: f.pinned.checked, title: f.title.value.trim(), body: f.body.value.trim(),
+      marquee: f.marquee.checked, marqueeText: f.marqueeText.value.trim(), marqueeUntil: f.marqueeUntil.value, updatedBy: me.email, updatedAt: serverTimestamp() };
+    if (!data.title) return toast('請填寫標題');
+    try {
+      if (isNew) await addDoc(collection(db, 'announcements'), { ...data, createdBy: me.email, createdAt: serverTimestamp() });
+      else await updateDoc(doc(db, 'announcements', a.id), data);
+      close(); await loadAnn(true); toast(isNew ? '已發布' : '已儲存');
+      if (!location.hash || location.hash.startsWith('#/home')) viewHome();
+    } catch (err) { toast(errMsg(err)); }
+  });
+  dlg.showModal();
+}
+
 // ---------------- 個人首頁 ----------------
 async function viewHome() {
   const t0 = new Date(), days = [0, 1, 2].map(n => ymdOf(addDays(t0, n)));
@@ -1192,12 +1317,19 @@ async function viewHome() {
     <div class="toolbar"><div><div class="hello">${t0.getFullYear()} 年 ${t0.getMonth() + 1} 月 ${t0.getDate()} 日　${wdName(days[0])}</div>
       <div class="muted" style="margin-top:4px">${greet}，${esc(me.nameZh || me.email)}　·　今天 ${byDay[0].length} 件、未來三天共 ${total} 件</div></div>
       <span class="spacer"></span><button class="ghost" id="hPriv">＋ 私人待辦</button><button id="hAdd">＋ 新增行程</button></div>
+    ${(() => { const al = annCache || []; const un = al.filter(annUnread).length;
+      return (al.length || isAdmin()) ? `<div class="board" id="annBoard"><div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">📌 公布欄</h2>${un ? `<span class="muted">${un} 則未讀</span>` : ''}<span class="spacer"></span>
+        ${isAdmin() ? '<button class="ghost small" id="annAdd">＋ 發布公告</button>' : ''}${al.length > 3 ? `<button class="ghost small" id="annAll">看全部（${al.length}）</button>` : ''}</div>
+        ${al.slice(0, 3).map(annRow).join('') || '<p class="muted">還沒有公告</p>'}</div>` : ''; })()}
     <div class="hdays">${days.map((d, i) => `<div class="hday ${i === 0 ? 'today' : ''}"><h3>${names[i]} ${Number(d.slice(5, 7))}/${Number(d.slice(8))}（${WD[toDate(d).getDay()]}）</h3>
       ${hol.has(d) ? `<span class="ev holiday" style="display:inline-block;margin-bottom:6px">${esc(hol.get(d))}</span>` : ''}
       ${byDay[i].map(item).join('') || '<p class="muted">沒有行程</p>'}</div>`).join('')}</div>
     <p class="muted" style="margin-top:10px">只列跟你有關的：你是業務、工程師或建立者的行程，加上你的私人待辦。點任一筆可開啟詳細。</p>
   </div>`;
   $('#hAdd').onclick = () => scheduleForm(null, { date: days[0] });
+  $('#annAdd')?.addEventListener('click', () => annForm(null));
+  $('#annAll')?.addEventListener('click', annList);
+  $('#annBoard')?.addEventListener('click', e => { const row = e.target.closest('[data-ann]'); if (!row) return; const a = (annCache || []).find(y => y.id === row.dataset.ann); if (a) annDetail(a); });
   $('#hPriv').onclick = () => scheduleForm(null, { date: days[0], type: 'other', salesEmail: '', engineerEmail: '', _private: true });
   app.querySelector('.hdays').addEventListener('click', e => {
     const el = e.target.closest('[data-sid]'); if (!el) return;
