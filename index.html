@@ -112,10 +112,16 @@ tr.left td{color:#9aa}
 .wk-times{position:relative}
 .wk-times span{position:absolute;right:6px;font-size:11px;color:var(--muted);transform:translateY(-50%);white-space:nowrap}
 .wk-times span:first-child{transform:none}
-.wk-col{position:relative;border-left:1px solid var(--line);cursor:pointer;background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 48px)}
+.wk-col{position:relative;border-left:1px solid var(--line);cursor:pointer;background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 60px)}
 .wk-col.today{background-color:#f7f8fe}
 .tev{position:absolute;border-radius:6px;padding:3px 6px;color:#fff;font-size:12px;line-height:1.35;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px #fff;display:flex;flex-direction:column}
 .tev b{font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.tev.short{justify-content:center;padding:1px 6px}
+.tev.short b{white-space:nowrap}
+.tev .tt{opacity:.85;font-weight:400}
+.tev.short:hover{z-index:6;height:auto!important;padding:4px 6px;box-shadow:0 4px 14px rgba(20,24,50,.35)}
+.tev.short:hover b{white-space:normal}
+.tev:not(.short):hover{z-index:6;box-shadow:0 4px 14px rgba(20,24,50,.35)}
 .tev span{opacity:.9;font-size:11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .tev.north{background:#3F51B5}.tev.midsouth{background:#2E7D32}.tev.leave{background:#D32F2F}.tev.none{background:#78849E}
 .wk-now{position:absolute;left:-1px;right:0;height:2px;background:#D93025;z-index:2;pointer-events:none}
@@ -235,7 +241,7 @@ body.resizing{cursor:col-resize;user-select:none}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-16e</div>
+<div class="ver">版本 2026-10-16f</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1488,7 +1494,7 @@ async function viewCalendar() {
 }
 
 // 週檢視：左側時間軸（像 Google 日曆）
-const WK_H = 48; // 每小時高度
+const WK_H = 60; // 每小時高度
 const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
 function weekGrid(start, end, list, hol, today, chip) {
   const days = []; for (let d = new Date(start); d <= end; d = addDays(d, 1)) days.push(ymdOf(d));
@@ -1520,7 +1526,11 @@ function weekGrid(start, end, list, hol, today, chip) {
     <div class="wk-row wk-body"><div class="wk-times" style="height:${H}px">${hours.map(h => `<span style="top:${(h - h0) * WK_H}px">${String(h).padStart(2, '0')}:00</span>`).join('')}</div>
     ${days.map(d => `<div class="wk-col ${d === today ? 'today' : ''}" data-day="${d}" data-h0="${h0}" style="height:${H}px">${place(timed.filter(x => x.date === d)).map(o => {
       const top = (o.s0 - h0 * 60) / 60 * WK_H, ht = Math.max((o.e0 - o.s0) / 60 * WK_H - 2, 20);
-      return `<div class="tev ${evColor(o.x)}" data-sid="${esc(o.x.id)}" title="${esc(o.x.title)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)"><b>${o.x._private ? '🔒 ' : ''}${o.x.tentative ? '【暫定】' : ''}${esc(o.x.title)}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}</div>`;
+      const short = ht < 46, tip = `${o.x.title}\n${timeText(o.x)}${o.x.place ? '\n' + o.x.place : ''}`;
+      const name = `${o.x._private ? '🔒 ' : ''}${o.x.tentative ? '【暫定】' : ''}${esc(o.x.title)}`;
+      return `<div class="tev ${evColor(o.x)} ${short ? 'short' : ''}" data-sid="${esc(o.x.id)}" title="${esc(tip)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)">${short
+        ? `<b><span class="tt">${esc(o.x.startTime)}</span> ${name}</b>`
+        : `<b>${name}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}`}</div>`;
     }).join('')}${d === today && nowMin >= h0 * 60 && nowMin <= h1 * 60 ? `<div class="wk-now" style="top:${(nowMin - h0 * 60) / 60 * WK_H}px"></div>` : ''}</div>`).join('')}</div>
   </div></div>`;
 }
