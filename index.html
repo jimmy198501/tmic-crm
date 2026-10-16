@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-15e</div>
+<div class="ver">版本 2026-10-16b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -321,6 +321,9 @@ function enhanceTables() {
 }
 let labelPending = false;
 new MutationObserver(() => { if (!labelPending) { labelPending = true; requestAnimationFrame(() => { labelPending = false; labelTables(); enhanceTables(); }); } }).observe(document.body, { childList: true, subtree: true });
+// 地址 → Google 地圖連結（手機會直接開 Google 地圖 App）
+const mapUrl = a => 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(String(a || '').split('\n')[0].trim());
+const mapLink = a => a ? `<a href="${mapUrl(a)}" target="_blank" rel="noopener">📍 ${String(a).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))}</a>` : '<span class="muted">—</span>';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isAdmin = () => me?.role === 'admin';
 const userRegions = u => Array.isArray(u?.regions) ? u.regions : (u?.region ? [u.region] : []);
@@ -550,7 +553,7 @@ function viewCustomer(id) {
     <h2>基本資料</h2>
     <div class="grid">
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
-      ${COMMON.slice(1).map(([k, t]) => k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
+      ${COMMON.slice(1).map(([k, t]) => k === 'address' && c.address ? `<div class="field"><label>${t}</label><div class="val">${mapLink(c.address)}</div></div>` : k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
     </div>
     ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
@@ -1186,7 +1189,10 @@ async function viewHome() {
 }
 
 // ---------------- 行事曆 ----------------
-const SCHED_TYPE = { sales: '業務 Demo', engineer: '工程師 Demo', class: '上課', leave: '休假', other: '其他' };
+// 行程類型（舊資料的 sales／engineer 都視為 Demo）
+const SCHED_OPTS = { demo: 'Demo', install: '裝機交貨', support: '技術支持', class: '上課', leave: '休假', other: '其他' };
+const SCHED_TYPE = { ...SCHED_OPTS, sales: 'Demo', engineer: 'Demo' };
+const stype = x => (x.type === 'sales' || x.type === 'engineer') ? 'demo' : x.type;
 const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '', weekStart: 0 };
 let privCache = null; // 我的私人行程
 async function loadPrivate() {
@@ -1265,7 +1271,7 @@ async function viewCalendar() {
   const list = all.filter(x => x.date <= s1 && endOf(x) >= s0)
     .filter(x => !cal.region || x.region === cal.region)
     .filter(x => !cal.person || x.salesEmail === cal.person || x.engineerEmail === cal.person)
-    .filter(x => !cal.type || x.type === cal.type)
+    .filter(x => !cal.type || stype(x) === cal.type)
     .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
   const cur = toDate(cal.cursor);
   const title = cal.view === 'week' ? `${s0} ～ ${s1}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
@@ -1296,7 +1302,7 @@ async function viewCalendar() {
       <span class="spacer"></span>
       <select id="cRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${cal.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
       <select id="cPerson"><option value="">全部人員</option>${userOptions(['sales', 'manager', 'engineer', 'admin'], cal.person)}</select>
-      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_OPTS).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <button class="ghost small" id="cRefresh">重新整理</button>
     </div>
     <div class="toolbar"><input id="cQ" placeholder="🔍 搜尋全部行程：標題、內容、地點、人員" style="max-width:360px"><span class="spacer"></span>${cal.view !== 'list' ? `<label class="checks" style="font-size:14px"><span style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="wkMon" style="width:auto" ${cal.weekStart === 1 ? 'checked' : ''}>週一開始</span></label>` : ''}</div>
@@ -1394,7 +1400,7 @@ async function viewCalSearch() {
   const list = allSchedCache.filter(x => words.every(w => text(x).includes(w)))
     .filter(x => !cal.region || x.region === cal.region)
     .filter(x => !cal.person || x.salesEmail === cal.person || x.engineerEmail === cal.person)
-    .filter(x => !cal.type || x.type === cal.type)
+    .filter(x => !cal.type || stype(x) === cal.type)
     .sort((a, b) => (b.date + (b.startTime || '')).localeCompare(a.date + (a.startTime || '')));
   const today = ymdOf(new Date());
   app.innerHTML = `<div class="card">
@@ -1403,7 +1409,7 @@ async function viewCalSearch() {
       <span class="spacer"></span>
       <select id="cRegion"><option value="">全部區域</option>${REGIONS.map(r => `<option ${cal.region === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
       <select id="cPerson"><option value="">全部人員</option>${userOptions(['sales', 'manager', 'engineer', 'admin'], cal.person)}</select>
-      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <select id="cType"><option value="">全部類型</option>${Object.entries(SCHED_OPTS).map(([k, t]) => `<option value="${k}" ${cal.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
     </div>
     <div class="muted" style="margin-bottom:8px">找到 ${list.length} 筆（新到舊）。多個關鍵字用空白隔開＝全部都要符合</div>
     ${list.length ? `<div class="tablewrap"><table><thead><tr><th>日期</th><th>時間</th><th>標題</th><th>類型</th><th>區域</th><th>業務</th><th>工程師</th><th>地點</th></tr></thead><tbody class="click">
@@ -1434,7 +1440,7 @@ function scheduleDetail(x) {
   const wd = d => WD[toDate(d).getDay()];
   dlg.innerHTML = `<h1><span class="ev ${evColor(x)}" style="display:inline-block;font-size:13px;vertical-align:middle">${SCHED_TYPE[x.type] || ''}</span> ${esc(x.title)}${x._private ? ' <span class="pill priv">🔒 私人</span>' : ''}${x.tentative && !x._private ? ' <span class="pill tent">暫定</span>' : ''}</h1>
     <p class="muted">${esc(x.date)}（${wd(x.date)}）${endOf(x) !== x.date ? `～${esc(endOf(x))}（${wd(endOf(x))}）` : ''}　${esc(timeText(x))}</p>
-    <div class="grid">${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}${f('地點', x.place)}
+    <div class="grid">${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}<div class="field"><label>地點</label><div class="val">${mapLink(x.place)}</div></div>
       <div class="field full"><label>網址</label><div class="val">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a>` : '<span class="muted">—</span>'}</div></div>
       <div class="field full"><label>內容</label><div class="val" style="white-space:pre-wrap">${esc(x.content) || '<span class="muted">—</span>'}</div></div>
       ${f('建立者', salesLabel(x.createdBy))}</div>
@@ -1515,13 +1521,13 @@ function scheduleToCustomer(x) {
 function scheduleForm(r, preset = {}) {
   const isNew = !r;
   const defRegion = userRegions(me).length === 1 ? userRegions(me)[0] : '';
-  const cur = r || Object.assign({ type: me.role === 'engineer' ? 'engineer' : 'sales', date: ymdOf(new Date()), region: defRegion,
+  const cur = r || Object.assign({ type: 'demo', date: ymdOf(new Date()), region: defRegion,
     salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : '', engineerEmail: (me.role === 'engineer' || me.alsoEngineer) && me.role !== 'sales' ? me.email : '' }, preset);
   const dlg = document.createElement('dialog');
   dlg.innerHTML = `<form id="sf2"><h1>${isNew ? '新增行程' : '編輯行程'}</h1>
     <div class="grid">
       <div class="field full"><label>標題 *</label><input name="title" value="${esc(cur.title)}" placeholder="例：彥豪智能-Demo[Andrew,Maggie]"></div>
-      <div class="field"><label>類型</label><select name="type">${Object.entries(SCHED_TYPE).map(([k, t]) => `<option value="${k}" ${cur.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>類型</label><select name="type">${Object.entries(SCHED_OPTS).map(([k, t]) => `<option value="${k}" ${stype(cur) === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div class="field"><label>區域</label><select name="region"><option value="">（未分區）</option>${REGIONS.map(x => `<option ${cur.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="field"><label>開始日期 *</label><input type="date" name="date" value="${esc(cur.date)}"></div>
       <div class="field"><label>結束日期</label><input type="date" name="endDate" value="${esc(cur.endDate || '')}"><div class="muted">單日行程可留空</div></div>
@@ -1926,7 +1932,9 @@ function parseGcalEvent(e) {
   let type = 'other';
   if (/休|假/.test(title)) type = 'leave';
   else if (/上課|課程|教育訓練/.test(title)) type = 'class';
-  else if (/demo/i.test(title)) type = sales ? 'sales' : 'engineer';
+  else if (/demo/i.test(title)) type = 'demo';
+  else if (/裝機|交貨|安裝/.test(title)) type = 'install';
+  else if (/技術支援|技術支持|遠端/.test(title)) type = 'support';
   const regOf = u => u ? (userRegions(u).length === 1 ? userRegions(u)[0] : '') : '';
   const region = regOf(sales) || regOf(eng) || (['9', '1'].includes(e.color) ? '台北' : '');
   const content = String(e.content || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
