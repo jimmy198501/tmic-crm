@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-16b</div>
+<div class="ver">版本 2026-10-16c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1070,7 +1070,8 @@ async function lineMsgsDialog(x, onChange) {
     dlg.innerHTML = `<div class="toolbar"><h1 style="margin:0" id="lName">${esc(x.name)}</h1><button class="ghost small" id="lRen">改名稱</button></div>
       <p class="muted">共 ${msgs.length} 則。可編輯內容、刪除，或設為「不算詢問」（不計入客戶詢問天數）。</p>
       <div style="max-height:60vh;overflow:auto" id="lList">${msgs.map(m => { const d = m.date !== last ? `<div class="lday"><b>${esc(m.date)}（${WD[toDate(m.date).getDay()]}）</b><span class="spacer"></span><span class="muted">處理同事</span>
-          <select class="lhand" data-date="${esc(m.date)}" style="width:auto"><option value="">（未註記）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], (x.handlers || {})[m.date] || '')}</select></div>` : ''; last = m.date;
+          <select class="lhand" data-date="${esc(m.date)}" style="width:auto"><option value="">（未註記）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], (x.handlers || {})[m.date] || '')}</select>
+          <button class="ghost small" data-day="ex" data-date="${esc(m.date)}">整天不算詢問</button><button class="danger small" data-day="del" data-date="${esc(m.date)}">刪除這天</button></div>` : ''; last = m.date;
         const off = m.excluded || isStaffName(m.sender);
         return d + `<div class="lmsg ${off ? 'off' : ''}" data-id="${esc(m.id)}"><div class="toolbar" style="margin:0"><b>${esc(m.sender || '（未知）')}</b><span class="muted">${esc(fmtAt(m.at).slice(11))}</span>
           ${m.excluded ? '<span class="pill tent">不算詢問</span>' : isStaffName(m.sender) ? '<span class="pill">同事</span>' : ''}${m.edited ? '<span class="muted">（已編輯）</span>' : ''}<span class="spacer"></span>
@@ -1094,6 +1095,22 @@ async function lineMsgsDialog(x, onChange) {
     if (e.target.id === 'lRen') {
       const n = prompt('對話名稱', x.name); if (n === null || !n.trim()) return;
       try { await updateDoc(doc(db, 'lineChats', x.id), { name: n.trim() }); x.name = n.trim(); changed = true; draw(); } catch (err) { toast(errMsg(err)); }
+      return;
+    }
+    const dayAct = e.target.dataset.day, dayDate = e.target.dataset.date;
+    if (dayAct && dayDate) {
+      const ds = msgs.filter(y => y.date === dayDate);
+      try {
+        if (dayAct === 'del') {
+          if (!confirm(`確定刪除 ${dayDate} 這天的 ${ds.length} 則訊息？刪除後無法復原。`)) return;
+          const b = writeBatch(db); ds.forEach(y => b.delete(doc(db, 'lineMsgs', y.id))); await b.commit();
+          msgs = msgs.filter(y => y.date !== dayDate); toast(`已刪除 ${ds.length} 則`);
+        } else {
+          const b = writeBatch(db); ds.forEach(y => { b.update(doc(db, 'lineMsgs', y.id), { excluded: true, editedBy: me.email, editedAt: serverTimestamp() }); y.excluded = true; }); await b.commit();
+          toast(`${dayDate} 已設為不算詢問`);
+        }
+        changed = true; draw();
+      } catch (err) { toast(errMsg(err)); }
       return;
     }
     const a = e.target.dataset.a, box = e.target.closest('.lmsg'); if (!a || !box) return;
