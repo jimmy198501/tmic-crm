@@ -220,7 +220,7 @@ body.resizing{cursor:col-resize;user-select:none}
 </header>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-16c</div>
+<div class="ver">版本 2026-10-16d</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1449,7 +1449,9 @@ async function viewCalSearch() {
   });
 }
 
-const canEditSched = x => x._private || isAdmin() || x.createdBy === me.email;
+const canDelSched = x => x._private || isAdmin() || x.createdBy === me.email;
+// 業務主管：可修改負責區域內的行程（不能刪除）
+const canEditSched = x => canDelSched(x) || (me.role === 'manager' && !!x.region && userRegions(me).includes(x.region));
 const SCHED_FIELDS = ['title', 'type', 'region', 'date', 'endDate', 'startTime', 'endTime', 'salesEmail', 'engineerEmail', 'place', 'url', 'content'];
 function scheduleDetail(x) {
   const dlg = document.createElement('dialog');
@@ -1465,7 +1467,7 @@ function scheduleDetail(x) {
       ${x.customerId && customers.has(x.customerId) ? '<button class="ghost" data-a="open">開啟客戶</button>' : (isAdmin() && !x._private ? '<button class="accent" data-a="conv">轉為潛在客戶</button>' : '')}
       ${demoTypes().filter(t => isAdmin() || (t === 'sales' ? x.salesEmail : x.engineerEmail) === me.email).map(t => `<button class="accent" data-a="demo" data-t="${t}">轉為${DEMO_TYPE[t]}紀錄</button>`).join('')}
       <button class="ghost" data-a="copy">⧉ 複製</button>
-      ${canEditSched(x) ? '<button class="danger" data-a="del">刪除</button><button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
+      ${canDelSched(x) ? '<button class="danger" data-a="del">刪除</button>' : ''}${canEditSched(x) ? '<button class="ghost" data-a="edit">編輯</button>' : ''}<button data-a="close">關閉</button></div>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.addEventListener('cancel', () => dlg.remove());
