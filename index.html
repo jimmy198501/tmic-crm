@@ -228,6 +228,10 @@ body.resizing{cursor:col-resize;user-select:none}
   dialog .grid{grid-template-columns:1fr}
   button{padding:7px 12px}
 }
+.tag.mt-late{background:#fbe3e0;color:#a02a1d}.tag.mt-30{background:#fff1d6;color:#7a5200}.tag.mt-90{background:#e5e8f5;color:var(--navy)}
+.mt-left{color:#a02a1d;font-size:13px}
+select.mst{width:auto;padding:4px 6px;font-size:13px}
+#maintBoard{margin-top:12px}
 /* 報價單編輯畫面 */
 .qwrap{display:grid;grid-template-columns:440px minmax(0,1fr);gap:16px;align-items:start}
 .qpanel .card{padding:14px;margin-bottom:12px}
@@ -261,7 +265,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-17b</div>
+<div class="ver">版本 2026-10-17c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -599,7 +603,7 @@ function viewCustomer(id) {
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
       ${COMMON.slice(1).map(([k, t]) => k === 'address' && c.address ? `<div class="field"><label>${t}</label><div class="val">${mapLink(c.address)}</div></div>` : k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
     </div>
-    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
+    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${(() => { const mi = maintInfo(c); return mi ? `<div class="field"><label>維護日期</label><div class="val">${esc(c.maintenanceDate)} ${maintTag(mi)}</div></div><div class="field"><label>維護追蹤狀態</label><div class="val">${maintSelect(c)}</div></div>` : f('維護日期', c.maintenanceDate); })()}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
   <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>
   ${isAdmin() ? '<div id="quoteBox"></div>' : ''}
@@ -610,6 +614,7 @@ function viewCustomer(id) {
   $('#edit')?.addEventListener('click', () => customerForm(c));
   $('#conv')?.addEventListener('click', () => convertToFormal(c));
   $('#del')?.addEventListener('click', () => deleteCustomer(c));
+  bindMaint(app);
   showRecords(c);
 }
 
@@ -1061,6 +1066,7 @@ $('#npanel').addEventListener('click', async e => {
   const n = notes.find(x => x.id === id);
   updateDoc(doc(db, 'notifications', id), { read: true }).catch(() => {});
   $('#npanel').classList.add('hidden');
+  if (n?.link) { location.hash = n.link; route(); return; }
   if (n?.date) { cal.cursor = n.date; }
   location.hash = '#/calendar'; route();
 });
@@ -1351,12 +1357,14 @@ async function viewHome() {
       return (al.length || isAdmin()) ? `<div class="board" id="annBoard"><div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">📌 公布欄</h2>${un ? `<span class="muted">${un} 則未讀</span>` : ''}<span class="spacer"></span>
         ${isAdmin() ? '<button class="ghost small" id="annAdd">＋ 發布公告</button>' : ''}${al.length > 3 ? `<button class="ghost small" id="annAll">看全部（${al.length}）</button>` : ''}</div>
         ${al.slice(0, 3).map(annRow).join('') || '<p class="muted">還沒有公告</p>'}</div>` : ''; })()}
+    ${maintHomeHtml()}
     <div class="hdays">${days.map((d, i) => `<div class="hday ${i === 0 ? 'today' : ''}"><h3>${names[i]} ${Number(d.slice(5, 7))}/${Number(d.slice(8))}（${WD[toDate(d).getDay()]}）</h3>
       ${hol.has(d) ? `<span class="ev holiday" style="display:inline-block;margin-bottom:6px">${esc(hol.get(d))}</span>` : ''}
       ${byDay[i].map(item).join('') || '<p class="muted">沒有行程</p>'}</div>`).join('')}</div>
     <p class="muted" style="margin-top:10px">只列跟你有關的：你是業務、工程師或建立者的行程，加上你的私人待辦。點任一筆可開啟詳細。</p>
   </div>`;
   $('#hAdd').onclick = () => scheduleForm(null, { date: days[0] });
+  bindMaint(app);
   $('#annAdd')?.addEventListener('click', () => annForm(null));
   $('#annAll')?.addEventListener('click', annList);
   $('#annBoard')?.addEventListener('click', e => { const row = e.target.closest('[data-ann]'); if (!row) return; const a = (annCache || []).find(y => y.id === row.dataset.ann); if (a) annDetail(a); });
@@ -1365,6 +1373,71 @@ async function viewHome() {
     const el = e.target.closest('[data-sid]'); if (!el) return;
     const x = mine.find(y => y.id === el.dataset.sid && !!y._private === (el.dataset.p === '1')); if (x) scheduleDetail(x);
   });
+}
+
+// ---------------- 維護到期追蹤（正式客戶：到期前 3 個月～過期 1 個月）----------------
+const MAINT_ST = ['未追蹤', '追蹤中', '已報價', '已續約', '不續約'];
+const MAINT_DONE = ['已續約', '不續約'];
+// 維護日期統一成 YYYY-MM-DD（舊資料可能是 2026/1/5）
+function normYmd(s) {
+  const m = String(s || '').trim().match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : '';
+}
+const addMonthsYmd = (ymd, n) => { const d = toDate(ymd); d.setMonth(d.getMonth() + n); return ymdOf(d); };
+// 這個狀態是針對目前的維護日期；改了維護日期就自動回到「未追蹤」
+const maintStatus = c => (c.maintStatus && c.maintStatusFor === c.maintenanceDate) ? c.maintStatus : '未追蹤';
+function maintInfo(c, today = ymdOf(new Date())) {
+  if (!c || c.deleted || c.status !== 'formal') return null;
+  const d = normYmd(c.maintenanceDate); if (!d) return null;
+  const days = Math.round((toDate(d) - toDate(today)) / 864e5);
+  const inWin = d >= addMonthsYmd(today, -1) && d <= addMonthsYmd(today, 3);
+  return { date: d, days, inWin, status: maintStatus(c) };
+}
+const maintTag = i => i.days < 0 ? `<span class="tag mt-late">過期 ${-i.days} 天</span>` : i.days === 0 ? '<span class="tag mt-late">今天到期</span>' : i.days <= 30 ? `<span class="tag mt-30">剩 ${i.days} 天</span>` : `<span class="tag mt-90">剩 ${i.days} 天</span>`;
+const salesGone = c => !c.salesEmail || users.get(c.salesEmail)?.active === false;
+function canEditMaint(c) {
+  if (isAdmin()) return true;
+  if (['sales', 'manager'].includes(me.role) && c.salesEmail === me.email) return true;
+  return me.role === 'manager' && userRegions(me).includes(c.region);
+}
+function maintSelect(c) {
+  const s = maintStatus(c);
+  return canEditMaint(c) ? `<select class="mst" data-mc="${esc(c.id)}">${MAINT_ST.map(o => `<option ${o === s ? 'selected' : ''}>${o}</option>`).join('')}</select>` : esc(s);
+}
+async function saveMaintStatus(cid, v) {
+  const c = customers.get(cid); if (!c) return;
+  const data = { maintStatus: v, maintStatusFor: c.maintenanceDate || '', maintStatusBy: me.email, maintStatusAt: serverTimestamp(), updatedAt: serverTimestamp() };
+  try { await updateDoc(doc(db, 'customers', cid), data); Object.assign(c, data, { maintStatusAt: new Date() }); toast('已更新追蹤狀態：' + v); }
+  catch (e) { toast('更新失敗：' + errMsg(e), 6000); }
+}
+// 首頁區塊：業務看自己的、主管看自己區域＋自己的、管理者看全部
+function maintHomeHtml() {
+  if (!(isAdmin() || ['sales', 'manager'].includes(me.role))) return '';
+  const today = ymdOf(new Date());
+  const list = [...customers.values()].filter(c => isAdmin() || c.salesEmail === me.email || (me.role === 'manager' && userRegions(me).includes(c.region)))
+    .map(c => ({ c, i: maintInfo(c, today) })).filter(x => x.i && x.i.inWin && !MAINT_DONE.includes(x.i.status))
+    .sort((a, b) => a.i.date.localeCompare(b.i.date));
+  const n = k => list.filter(x => maintBucket(x.i) === k).length;
+  return `<div class="board" id="maintBoard"><div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">🔧 維護到期追蹤</h2>
+      <div class="seg" id="mseg">${[['all', '全部', list.length], ['late', '已過期', n('late')], ['30', '30 天內', n('30')], ['90', '1～3 個月', n('90')]].map(([k, t, c], i) => `<button data-k="${k}" class="${i ? '' : 'on'}">${t} ${c}</button>`).join('')}</div>
+      <span class="muted">${addMonthsYmd(today, -1).replaceAll('-', '/')}～${addMonthsYmd(today, 3).replaceAll('-', '/')}</span></div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>維護到期日</th><th>剩餘</th><th>客戶</th><th>區域</th><th>負責業務</th><th>購買產品</th><th>追蹤狀態</th></tr></thead><tbody>${list.map(({ c, i }) => `<tr data-b="${maintBucket(i)}">
+      <td><b>${i.date.replaceAll('-', '/')}</b></td><td>${maintTag(i)}</td><td><a href="#/customer/${encodeURIComponent(c.id)}">${esc(custNo(c))} ${esc(c.name)}</a></td><td>${esc(c.region)}</td>
+      <td>${salesGone(c) ? `<span class="mt-left">⚠ ${c.salesEmail ? esc(salesLabel(c.salesEmail)) : '未指定'}</span>` : esc(salesLabel(c.salesEmail))}</td><td class="wrap">${esc(c.purchasedProduct)}</td><td>${maintSelect(c)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">目前沒有需要追蹤的維護到期客戶</p>'}
+    <p class="muted" style="margin:6px 0 0">標成「已續約」或「不續約」就不再列出、也不再寄提醒；續約後請改客戶的維護日期。</p></div>`;
+}
+const maintBucket = i => i.days < 0 ? 'late' : i.days <= 30 ? '30' : '90';
+function bindMaint(root) {
+  root.querySelector('#mseg')?.addEventListener('click', e => {
+    const k = e.target.dataset.k; if (!k) return;
+    root.querySelectorAll('#mseg button').forEach(b => b.classList.toggle('on', b === e.target));
+    root.querySelectorAll('#maintBoard tr[data-b]').forEach(tr => tr.classList.toggle('hidden', k !== 'all' && tr.dataset.b !== k));
+  });
+  root.querySelectorAll('select.mst').forEach(s => s.addEventListener('change', async e => {
+    await saveMaintStatus(e.target.dataset.mc, e.target.value);
+    if (MAINT_DONE.includes(e.target.value) && e.target.closest('#maintBoard')) e.target.closest('tr')?.remove();
+  }));
 }
 
 // ---------------- 行事曆 ----------------
