@@ -228,6 +228,26 @@ body.resizing{cursor:col-resize;user-select:none}
   dialog .grid{grid-template-columns:1fr}
   button{padding:7px 12px}
 }
+/* 報價單編輯畫面 */
+.qwrap{display:grid;grid-template-columns:440px minmax(0,1fr);gap:16px;align-items:start}
+.qpanel .card{padding:14px;margin-bottom:12px}
+.qpanel h2{font-size:15px}
+.q2{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.q2 .full{grid-column:1/-1}
+.q3{display:grid;grid-template-columns:1fr .6fr 1fr;gap:6px}
+.qitem{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;background:#fbfbfe;display:flex;flex-direction:column;gap:6px}
+.qtop{display:flex;gap:6px;align-items:center}
+.qtop b{color:var(--navy)}
+.qtop input{flex:1}
+.qvers{display:flex;flex-direction:column;gap:4px}
+.qvers a{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:8px;text-decoration:none;color:var(--ink)}
+.qvers a.on{background:#e5e8f5}
+.qfile{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0}
+.chk{display:flex;align-items:center;gap:6px;margin:4px 0}
+.chk input{width:auto}
+.qstage{overflow:auto;min-width:0;position:sticky;top:80px}
+dialog.wide{max-width:980px}
+@media (max-width:1100px){.qwrap{grid-template-columns:1fr}.qstage{position:static}}
 </style>
 </head>
 <body>
@@ -241,7 +261,7 @@ body.resizing{cursor:col-resize;user-select:none}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-16g</div>
+<div class="ver">版本 2026-10-17b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -467,9 +487,9 @@ function renderNav() {
   const h = location.hash || '#/home';
   const items = [['#/home', '首頁'], ['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
   if (isAdmin() || isEngineer()) items.push(['#/line', 'LINE']);
-  if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
+  if (isAdmin()) items.push(['#/quotes', '報價單'], ['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
   $('#nav').innerHTML = items.map(([href, t]) => {
-    const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/'));
+    const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/')) || (href === '#/quotes' && h.startsWith('#/quote/'));
     return `<a href="${href}" class="${on ? 'active' : ''}">${t}</a>`;
   }).join('');
 }
@@ -482,6 +502,8 @@ function route() {
   else if (page === 'calendar') viewCalendar();
   else if (page === 'records') viewRecords();
   else if (page === 'line' && (isAdmin() || isEngineer())) viewLine();
+  else if (page === 'quotes' && isAdmin()) (id === 'tpl' ? viewQuoteTpls() : viewQuotes());
+  else if (page === 'quote' && id && isAdmin()) viewQuote(decodeURIComponent(id));
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else if (page === 'import' && isAdmin()) viewImport();
@@ -580,7 +602,9 @@ function viewCustomer(id) {
     ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
   <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>
+  ${isAdmin() ? '<div id="quoteBox"></div>' : ''}
   ${isAdmin() || isEngineer() ? '<div id="lineBox"></div>' : ''}`;
+  if (isAdmin()) showQuotesForCustomer(c);
   if (isAdmin() || isEngineer()) showLineForCustomer(c);
   app.querySelectorAll('a.navc').forEach(a => a.addEventListener('click', () => window.scrollTo(0, 0)));
   $('#edit')?.addEventListener('click', () => customerForm(c));
@@ -1685,7 +1709,9 @@ function scheduleToCustomer(x) {
 
 function scheduleForm(r, preset = {}) {
   const isNew = !r;
-  const defRegion = userRegions(me).length === 1 ? userRegions(me)[0] : '';
+  const myR = userRegions(me);
+  // 只有一區 → 那一區；台中＋台南 → 以台中為主
+  const defRegion = myR.length === 1 ? myR[0] : (myR.length === 2 && myR.includes('台中') && myR.includes('台南') ? '台中' : '');
   const cur = r || Object.assign({ type: 'demo', date: ymdOf(new Date()), region: defRegion,
     salesEmail: ['sales', 'manager'].includes(me.role) ? me.email : '', engineerEmail: (me.role === 'engineer' || me.alsoEngineer) && me.role !== 'sales' ? me.email : '' }, preset);
   const dlg = document.createElement('dialog');
@@ -2011,6 +2037,468 @@ function pickCustomer(cb, onCancel) {
   });
   dlg.showModal();
   dlg.querySelector('#pq').focus();
+}
+
+// ---------------- 報價單（目前只有管理者）----------------
+const Q_COMPANY = { tel: '02-2226-1658', fax: '02-2226-5258', addr: '新北市中和區中正路801號6樓D室' };
+const Q_CANCEL = '本訂購單簽回為不可撤銷之訂單，未經買賣雙方同意，單方不得取消訂單，違者需支付另一方50%違約金';
+const Q_LOGO = () => new URL('quote-logo.png', location.href).href;
+const Q_STAMP = () => new URL('quote-stamp.png', location.href).href;
+const qNum = v => Number(v) || 0;
+const qMoney = n => qNum(n) ? Math.round(qNum(n)).toLocaleString('en-US') : '-';
+const qSum = q => (q.items || []).reduce((s, x) => s + qNum(x.disc) * qNum(x.qty), 0);
+const qTax = q => Math.round(qSum(q) * 1.05);
+const qVer = q => 'v' + (q.ver || 1);
+// 業務窗口的信箱：公司信箱（英文名@tmic.asia）
+function qMail(email) {
+  const u = users.get(email); if (!u) return '';
+  if (/@tmic\.asia$/i.test(u.companyEmail || '')) return u.companyEmail;
+  const en = String(u.nameEn || '').trim().split(/\s+/)[0];
+  return en ? en.toLowerCase() + '@tmic.asia' : '';
+}
+const qSalesName = email => { const u = users.get(email); return u ? `${u.nameZh || ''}${u.nameEn ? ' ' + u.nameEn : ''}` : ''; };
+function qWmTile(text) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="260" height="190"><text x="130" y="95" text-anchor="middle" dominant-baseline="middle" transform="rotate(-28 130 95)" font-family="Microsoft JhengHei,Noto Sans TC,sans-serif" font-size="22" font-weight="700" fill="#1F2A66" fill-opacity="0.07">${esc(text)}</text></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+}
+const QCSS = `
+.qpaper{width:210mm;min-height:297mm;margin:0 auto;background:#fff;box-shadow:0 2px 14px rgba(20,30,80,.12);padding:9mm 10mm 12mm;position:relative;font-family:'Microsoft JhengHei','微軟正黑體','Noto Sans TC',sans-serif;color:#000;font-size:11px;line-height:1.4;-webkit-print-color-adjust:exact;print-color-adjust:exact;text-align:left}
+.qpaper.wm{background-image:var(--wm);background-repeat:repeat;background-size:260px 190px}
+.qpaper .q-logo{display:flex;justify-content:center;margin-bottom:2mm}
+.qpaper .q-logo img{height:19mm}
+.qpaper .q-title{text-align:center;font-weight:700;font-size:15px;letter-spacing:.9em;margin:1mm 0 3mm;padding-left:.9em}
+.qpaper .q-info{display:grid;grid-template-columns:55% 45%;row-gap:1.6mm;margin-bottom:3mm}
+.qpaper .q-info div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qpaper .q-info .lb{display:inline-block;min-width:5.2em;text-align-last:justify;margin-right:.2em}
+.qpaper table.q{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px}
+.qpaper table.q th{background:#d0d0d0;color:#000;border:1px solid #000;border-top:2px solid #000;font-weight:700;padding:1.2mm 1mm;letter-spacing:.25em;font-size:10.5px;text-align:center;white-space:nowrap}
+.qpaper table.q th.n{letter-spacing:0}
+.qpaper table.q td{border:0;border-left:1px solid #000;border-right:1px solid #000;padding:.7mm 1.4mm;vertical-align:top;white-space:normal;color:#000;text-align:left}
+.qpaper table.q tr.main td{background:#d9d9d9;border-top:1px solid #000;padding:2.2mm 1.4mm;vertical-align:middle}
+.qpaper table.q td.c{text-align:center}
+.qpaper table.q td.r{text-align:right;font-variant-numeric:tabular-nums}
+.qpaper table.q tr.desc td{font-size:10.5px;line-height:1.55;white-space:pre-wrap}
+.qpaper table.q tr.end td{border-bottom:1px solid #000;height:3mm;padding:0}
+.qpaper table.q tr.main{break-inside:avoid;break-after:avoid}
+.qpaper .q-tot{position:relative;display:grid;grid-template-columns:1fr auto 30mm;font-weight:700}
+.qpaper .q-tot .l{grid-column:2;text-align:right;padding:1.2mm 3mm;border-bottom:1px solid #000}
+.qpaper .q-tot .v{text-align:right;padding:1.2mm 1.4mm;border-bottom:1px solid #000;font-variant-numeric:tabular-nums}
+.qpaper .q-tot .v:before{content:'$';float:left;padding-left:2mm}
+.qpaper .q-stamp{position:absolute;left:52%;top:-13mm;width:40mm;transform:translateX(-50%);z-index:2;pointer-events:none}
+.qpaper .q-foot{display:grid;grid-template-columns:1fr 62mm;gap:4mm;margin-top:3mm;border-top:2px solid #000;padding-top:2mm;break-inside:avoid}
+.qpaper .q-terms{font-size:10px;line-height:1.75}
+.qpaper .q-terms .h{font-size:11px;margin-bottom:.5mm}
+.qpaper .q-terms ol{margin:0;padding-left:5.5mm}
+.qpaper .q-agent{position:relative;text-align:center;font-size:10px;padding-top:1mm;min-height:24mm}
+.qpaper .q-agent .line{position:absolute;left:4mm;right:4mm;bottom:3mm;border-top:1px solid #000}
+.qpaper .q-sign{display:grid;grid-template-columns:10mm 1fr 62mm;border:2px solid #000;margin-top:4mm;background:#efefef;break-inside:avoid}
+.qpaper .q-sign .v{border-right:1px solid #000;display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1.5;text-align:center}
+.qpaper .q-sign .t{padding:2mm 3mm;font-size:10px;line-height:1.6;border-right:1px solid #000;background:#fff}
+.qpaper .q-sign .t .a{border-bottom:1px solid #000;padding-bottom:2mm;margin-bottom:2mm}
+.qpaper .q-sign .t .b{font-size:10.5px}
+.qpaper .q-sign .s{text-align:center;font-size:11px;padding-top:2mm;background:#fff;min-height:30mm}
+.qpaper .q-sign .s small{display:block;font-size:10px;margin-top:.5mm}`;
+(() => { const s = document.createElement('style'); s.textContent = QCSS; document.head.appendChild(s); })();
+
+function qPaperHtml(q) {
+  const d = q.qDate ? q.qDate.replaceAll('-', '/') : '';
+  const sum = qSum(q), terms = String(q.terms || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const rows = (q.items || []).map((x, i) => `<tr class="main"><td class="c">${i + 1}</td><td class="c">${esc(x.partNo)}</td><td>${esc(x.name)}</td>
+      <td class="r">${qMoney(x.price)}</td><td class="c">${esc(x.qty)}</td><td class="r">${qMoney(x.disc)}</td><td class="r">${qMoney(qNum(x.disc) * qNum(x.qty))}</td></tr>` +
+    (String(x.desc || '').trim() ? `<tr class="desc"><td></td><td></td><td>${esc(x.desc)}</td><td></td><td></td><td></td><td></td></tr>` : '')).join('');
+  const L = t => `<span class="lb">${t}</span>：`;
+  return `<div class="q-logo"><img src="${Q_LOGO()}" alt="TMIC 明日國際"></div>
+    <div class="q-title">產品訂購單</div>
+    <div class="q-info">
+      <div>${L('報價單號')}${esc(q.qNo)}</div><div>${L('報價日期')}${esc(d)}</div>
+      <div>${L('公司名稱')}${esc(q.cName)}</div><div>${L('業務窗口')}${esc(q.sName)}</div>
+      <div>${L('聯絡人')}${esc(q.cContact)}</div><div>${L('聯絡電話')}${Q_COMPANY.tel}</div>
+      <div>${L('電話')}${esc(q.cTel)}</div><div>${L('傳真電話')}${Q_COMPANY.fax}</div>
+      <div>${L('傳真')}${esc(q.cFax)}</div><div>${L('電子郵件')}${esc(q.sMail)}</div>
+      <div>${L('付款條件')}${esc(q.pay)}</div><div>${L('公司地址')}${Q_COMPANY.addr}</div>
+    </div>
+    <table class="q"><colgroup><col style="width:4.2%"><col style="width:15.5%"><col><col style="width:9.2%"><col style="width:5%"><col style="width:9.2%"><col style="width:10.2%"></colgroup>
+      <thead><tr><th class="n">NO.</th><th>產品料號</th><th>產品名稱及版本規格</th><th class="n">單價(NT$)</th><th class="n">數量</th><th class="n">優惠(NT$)</th><th class="n">小計(NT$)</th></tr></thead>
+      <tbody>${rows}<tr class="end"><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr></tbody></table>
+    <div class="q-tot">${q.stampOn !== false ? `<img class="q-stamp" src="${Q_STAMP()}" alt="報價專用章">` : ''}
+      <div class="l">總計（未稅）</div><div class="v">${qMoney(sum)}</div><div class="l">總計（含稅）</div><div class="v">${qMoney(Math.round(sum * 1.05))}</div></div>
+    <div class="q-foot"><div class="q-terms"><div class="h">報價說明：</div><ol>${terms.map(t => `<li>${esc(t)}</li>`).join('')}</ol></div>
+      <div class="q-agent">經辦人簽名及日期<div class="line"></div></div></div>
+    <div class="q-sign"><div class="v">訂<br>單<br>簽<br>回</div>
+      <div class="t"><div class="a">台端茲同意本訂購單之項目、價格與付款條件，簽回本單將視同正式訂單。</div><div class="b">${esc(q.cancel || Q_CANCEL)}</div></div>
+      <div class="s">客戶簽名及日期<small>(請簽中文全名並蓋公司章)</small></div></div>`;
+}
+function qPaperAttrs(q) { return { cls: 'qpaper' + (q.wmOn !== false ? ' wm' : ''), style: `--wm:${qWmTile(q.wmText ?? '明日國際 TMIC')}` }; }
+function qPrint(q) {
+  const w = window.open('', '_blank');
+  if (!w) return toast('瀏覽器擋住了新視窗，請允許彈出視窗');
+  const a = qPaperAttrs(q);
+  const title = [q.customerName || q.cName, q.title, qVer(q)].filter(Boolean).join('_').replace(/[\\/:*?"<>|]/g, '');
+  w.document.write(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+    <style>body{margin:0;background:#fff}${QCSS}
+    @page{size:A4;margin:8mm 0 10mm;@bottom-center{content:"第 " counter(page) " 頁，共 " counter(pages) " 頁";font-family:'Microsoft JhengHei','Noto Sans TC',sans-serif;font-size:9pt}}
+    @media print{.qpaper{box-shadow:none;min-height:0;padding:0 10mm;width:auto}}</style></head>
+    <body><div class="${a.cls}" style="${esc(a.style)}">${qPaperHtml(q)}</div>
+    <script>Promise.all([...document.images].map(i=>i.complete?1:new Promise(r=>{i.onload=i.onerror=r})))
+      .then(()=>document.fonts.ready).then(()=>setTimeout(()=>print(),200));<\/script></body></html>`);
+  w.document.close();
+}
+
+// ---- 範本 ----
+let qTplCache = null;
+async function loadQTpl(force) {
+  if (qTplCache && !force) return qTplCache;
+  const s = await getDocs(collection(db, 'quoteTemplates'));
+  qTplCache = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return qTplCache;
+}
+const qTplOptions = (list, sel) => {
+  const g = {}; list.forEach(t => (g[t.group || '其他'] = g[t.group || '其他'] || []).push(t));
+  return Object.entries(g).map(([k, a]) => `<optgroup label="${esc(k)}">${a.map(t => `<option value="${esc(t.id)}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
+};
+const qCopyItems = items => (items || []).map(x => ({ partNo: x.partNo || '', name: x.name || '', desc: Array.isArray(x.desc) ? x.desc.join('\n') : (x.desc || ''), price: qNum(x.price), qty: x.qty ?? 1, disc: x.disc ?? qNum(x.price) }));
+const qTermsText = t => Array.isArray(t) ? t.join('\n') : (t || '');
+function qCatalog() {
+  const out = [], seen = new Set();
+  (qTplCache || []).forEach(t => (t.items || []).forEach(it => { const k = it.partNo + '|' + it.name + '|' + it.price; if (!seen.has(k)) { seen.add(k); out.push(it); } }));
+  return out;
+}
+
+// 產品項目編輯器（報價單與範本共用）
+function qItemsEditor(box, items, onChange) {
+  const draw = () => {
+    box.innerHTML = items.map((x, i) => `<div class="qitem" data-i="${i}">
+      <div class="qtop"><b>${i + 1}.</b><input data-k="partNo" value="${esc(x.partNo)}" placeholder="產品料號">
+        <button type="button" class="small ghost" data-a="up" title="上移">↑</button><button type="button" class="small ghost" data-a="down" title="下移">↓</button><button type="button" class="small danger" data-a="del" title="刪除">✕</button></div>
+      <input data-k="name" value="${esc(x.name)}" placeholder="產品名稱及版本規格">
+      <textarea data-k="desc" rows="${Math.min(8, Math.max(2, String(x.desc || '').split('\n').length))}" placeholder="規格說明（一行一項）">${esc(x.desc)}</textarea>
+      <div class="q3"><div class="field"><label>單價</label><input data-k="price" type="number" value="${esc(x.price)}"></div>
+        <div class="field"><label>數量</label><input data-k="qty" type="number" min="0" value="${esc(x.qty)}"></div>
+        <div class="field"><label>優惠單價</label><input data-k="disc" type="number" value="${esc(x.disc)}"></div></div></div>`).join('') || '<p class="muted">尚無項目</p>';
+  };
+  box.oninput = e => {
+    const k = e.target.dataset.k; if (!k) return;
+    const el = e.target.closest('.qitem'); const i = +el.dataset.i; const v = e.target.value;
+    if (k === 'price') { const old = items[i].price; items[i].price = qNum(v); if (qNum(items[i].disc) === qNum(old)) { items[i].disc = items[i].price; el.querySelector('[data-k=disc]').value = items[i].disc; } }
+    else items[i][k] = ['qty', 'disc'].includes(k) ? qNum(v) : v;
+    onChange();
+  };
+  box.onclick = e => {
+    const a = e.target.dataset.a; if (!a) return;
+    const i = +e.target.closest('.qitem').dataset.i;
+    if (a === 'del') items.splice(i, 1);
+    if (a === 'up' && i > 0) [items[i - 1], items[i]] = [items[i], items[i - 1]];
+    if (a === 'down' && i < items.length - 1) [items[i + 1], items[i]] = [items[i], items[i + 1]];
+    draw(); onChange();
+  };
+  draw();
+  return { draw, add(it) { items.push(it); draw(); onChange(); } };
+}
+
+// ---- 報價單列表 ----
+async function viewQuotes() {
+  app.innerHTML = '<div class="card"><p class="muted">載入報價單中…</p></div>';
+  let list;
+  try { list = (await getDocs(collection(db, 'quotes'))).docs.map(d => ({ id: d.id, ...d.data() })); }
+  catch (e) { app.innerHTML = `<div class="card"><p>報價單載入失敗：${esc(errMsg(e))}</p><p class="muted">如果是「權限不足」，請確認 Firebase 規則已發布（tmic-crm 專案）。</p></div>`; return; }
+  const latest = qLatest(list);
+  app.innerHTML = `<div class="card"><h1>報價單</h1>
+    <div class="toolbar"><input id="qq" placeholder="搜尋客戶、報價單號、內容"><select id="qs"><option value="">全部狀態</option><option value="signed">已簽回</option><option value="open">未簽回</option></select>
+      <span class="spacer"></span><button class="ghost" id="qtpl">報價範本</button><button id="qadd">＋ 新增報價單</button></div>
+    <div class="muted" id="qcount"></div>
+    <div class="tablewrap"><table><thead><tr><th>報價日期</th><th>報價單號</th><th>客戶</th><th>內容</th><th>版本</th><th>業務窗口</th><th>總計（含稅）</th><th>狀態</th></tr></thead><tbody id="qbody" class="click"></tbody></table></div></div>`;
+  const draw = () => {
+    const q = $('#qq').value.trim().toLowerCase(), s = $('#qs').value;
+    const rows = latest.filter(x => !q || [x.customerName, x.qNo, x.title, x.cName].some(v => String(v || '').toLowerCase().includes(q)))
+      .filter(x => !s || (s === 'signed') === !!(x._signedAny));
+    $('#qcount').textContent = `共 ${rows.length} 份（每份顯示最新版本）`;
+    $('#qbody').innerHTML = rows.map(x => `<tr data-id="${esc(x.id)}"><td>${esc(x.qDate)}</td><td>${esc(x.qNo)}</td><td>${esc(x.customerName || x.cName)}</td><td>${esc(x.title)}</td>
+      <td>${qVer(x)}${x._count > 1 ? `<span class="muted">（共 ${x._count} 版）</span>` : ''}</td><td>${esc(x.sName)}</td><td>${qMoney(qTax(x))}</td>
+      <td>${x._signedAny ? '<span class="tag formal">已簽回</span>' : '<span class="muted">未簽回</span>'}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">還沒有報價單</td></tr>';
+  };
+  draw();
+  $('#qq').oninput = draw; $('#qs').onchange = draw;
+  $('#qbody').onclick = e => { const id = e.target.closest('[data-id]')?.dataset.id; if (id) location.hash = '#/quote/' + id; };
+  $('#qadd').onclick = () => qNew();
+  $('#qtpl').onclick = () => { location.hash = '#/quotes/tpl'; };
+}
+// 每組報價只取最新版本；_signedAny＝任一版本已簽回
+function qLatest(list) {
+  const g = new Map();
+  list.forEach(x => { const k = x.groupId || x.id; (g.get(k) || g.set(k, []).get(k)).push(x); });
+  return [...g.values()].map(a => {
+    a.sort((p, q) => (q.ver || 1) - (p.ver || 1));
+    return { ...a[0], _count: a.length, _signedAny: a.some(v => (v.signed || []).length) };
+  }).sort((p, q) => String(q.qDate || '').localeCompare(String(p.qDate || '')));
+}
+
+// ---- 新增 ----
+let qDraft = null;
+async function qNew(c) {
+  if (!c) return pickCustomer(x => qNew(x));
+  let tpls;
+  try { tpls = await loadQTpl(); } catch (e) { return toast('範本載入失敗：' + errMsg(e)); }
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<h1>新增報價單</h1><p>客戶：<strong>${esc(custNo(c))}　${esc(c.name)}</strong></p>
+    <div class="field"><label>選擇範本</label><select id="nt">${tpls.length ? qTplOptions(tpls) : ''}<option value="">（空白報價單）</option></select></div>
+    ${tpls.length ? '' : '<p class="muted">還沒有範本，可到「報價單 → 報價範本」匯入。</p>'}
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button class="ghost" id="nc">取消</button><button id="ng">建立</button></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#nc').onclick = close; dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#ng').onclick = () => {
+    const t = tpls.find(x => x.id === dlg.querySelector('#nt').value);
+    const sales = c.salesEmail && users.get(c.salesEmail) ? c.salesEmail : (['sales', 'manager'].includes(me.role) ? me.email : '');
+    qDraft = { customerId: c.id, customerName: c.name || '', customerNo: custNo(c) || c.leadNo || '', region: c.region || '',
+      title: t ? t.name : '自訂報價', tplId: t ? t.id : '', qNo: '', qDate: ymdOf(new Date()),
+      cName: c.name || '', cContact: c.contact || '', cTel: c.phone || c.mobile || '', cFax: c.fax || '',
+      salesEmail: sales, sName: qSalesName(sales), sMail: qMail(sales),
+      pay: t ? t.payment || '' : '合約簽定，貨到一次付清(即期支票)。', terms: t ? qTermsText(t.terms) : '', cancel: t?.cancel || Q_CANCEL,
+      items: t ? qCopyItems(t.items) : [], wmOn: true, wmText: '明日國際 TMIC', stampOn: true, ver: 1, signed: [] };
+    close(); location.hash = '#/quote/new';
+  };
+  dlg.showModal();
+}
+
+// ---- 編輯 ----
+async function viewQuote(id) {
+  let q, versions = [];
+  if (id === 'new') {
+    if (!qDraft) { location.hash = '#/quotes'; return; }
+    q = qDraft;
+  } else {
+    app.innerHTML = '<div class="card"><p class="muted">載入中…</p></div>';
+    try {
+      const s = await getDoc(doc(db, 'quotes', id));
+      if (!s.exists()) { app.innerHTML = '<div class="card"><p>找不到這份報價單。</p><a href="#/quotes">← 報價單列表</a></div>'; return; }
+      q = { id: s.id, ...s.data() };
+      versions = (await getDocs(query(collection(db, 'quotes'), where('groupId', '==', q.groupId || q.id)))).docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.ver || 1) - (a.ver || 1));
+    } catch (e) { app.innerHTML = `<div class="card"><p>載入失敗：${esc(errMsg(e))}</p><a href="#/quotes">← 報價單列表</a></div>`; return; }
+  }
+  try { await loadQTpl(); } catch (e) { /* 沒有範本也能編輯 */ }
+  q.items = q.items || []; q.signed = q.signed || [];
+  const isNew = id === 'new';
+  let dirty = isNew;
+  const tpls = qTplCache || [];
+  app.innerHTML = `<div class="custnav"><a href="#/quotes">← 報價單列表</a>${q.customerId ? `<a href="#/customer/${encodeURIComponent(q.customerId)}">客戶頁</a>` : ''}<span class="spacer"></span><span class="muted" id="qdirty"></span></div>
+  <div class="qwrap"><div class="qpanel">
+    <div class="card"><div class="sec-head"><h2 style="margin:0">${esc(q.customerName || q.cName || '（未選客戶）')}</h2><span class="spacer"></span><button class="small ghost" id="qcust">換客戶</button></div>
+      <div class="muted" style="margin-bottom:8px">${esc(q.title)}　${isNew ? '（尚未儲存）' : qVer(q)}</div>
+      ${versions.length > 1 ? `<div class="qvers">${versions.map(v => `<a href="#/quote/${esc(v.id)}" class="${v.id === q.id ? 'on' : ''}"><b>${qVer(v)}</b><span>${esc(v.qDate)}</span>${(v.signed || []).length ? '<span class="tag formal">已簽回</span>' : ''}</a>`).join('')}</div>` : ''}
+      <div class="row-actions" style="margin-top:10px"><button id="qsave">儲存</button>${isNew ? '' : '<button class="ghost" id="qnewver">另存新版本</button>'}<button class="accent" id="qprint">列印／存成 PDF</button>${isNew ? '' : '<button class="danger" id="qdel">刪除此版本</button>'}</div>
+    </div>
+    <div class="card"><h2>客戶簽回掃描檔</h2>
+      <div id="qsigned"></div>
+      <label class="small" style="display:inline-block;margin-top:8px"><input type="file" id="qup" accept="application/pdf,image/*" multiple style="max-width:280px"></label>
+      <div class="muted">上傳到 Google 雲端（客戶編號資料夾），會記在這個版本上。</div>
+    </div>
+    <div class="card"><h2>表頭</h2><div class="q2">
+      <div class="field"><label>報價單號</label><input data-f="qNo" value="${esc(q.qNo)}" placeholder="（編號規則待確認）"></div>
+      <div class="field"><label>報價日期</label><input data-f="qDate" type="date" value="${esc(q.qDate)}"></div>
+      <div class="field full"><label>公司名稱</label><input data-f="cName" value="${esc(q.cName)}"></div>
+      <div class="field"><label>聯絡人</label><input data-f="cContact" value="${esc(q.cContact)}"></div>
+      <div class="field"><label>電話</label><input data-f="cTel" value="${esc(q.cTel)}"></div>
+      <div class="field"><label>傳真</label><input data-f="cFax" value="${esc(q.cFax)}"></div>
+      <div class="field"><label>業務窗口</label><select id="qsales"><option value="">（未指定）</option>${salesOptions(q.salesEmail)}</select></div>
+      <div class="field full"><label>電子郵件（業務公司信箱）</label><input data-f="sMail" value="${esc(q.sMail)}" placeholder="英文名@tmic.asia"></div>
+      <div class="field full"><label>付款條件</label><input data-f="pay" value="${esc(q.pay)}" list="qpaylist"><datalist id="qpaylist">${[...new Set(tpls.map(t => t.payment).filter(Boolean))].map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
+    </div></div>
+    <div class="card"><div class="sec-head"><h2 style="margin:0">產品項目</h2><span class="spacer"></span><button class="small ghost" id="qblank">＋空白項目</button></div>
+      <div id="qitems"></div>
+      <div class="field"><label>從產品庫加入</label><select id="qcat"><option value="">— 選擇產品 —</option>${qCatalog().map((it, i) => `<option value="${i}">${esc(it.partNo)}｜${esc(it.name)}｜${qMoney(it.price)}</option>`).join('')}</select></div>
+      ${tpls.length ? `<div class="field" style="margin-top:8px"><label>套用其他範本（會取代項目、付款條件、報價說明）</label><select id="qapply"><option value="">— 選擇範本 —</option>${qTplOptions(tpls)}</select></div>` : ''}
+    </div>
+    <div class="card"><h2>報價說明</h2><textarea data-f="terms" rows="5">${esc(q.terms)}</textarea><div class="muted">一行一條，會自動編號。</div></div>
+    <div class="card"><h2>浮水印與用印</h2>
+      <label class="chk"><input type="checkbox" id="qwm" ${q.wmOn !== false ? 'checked' : ''}> 顯示浮水印</label>
+      <div class="field"><label>浮水印文字</label><input data-f="wmText" value="${esc(q.wmText ?? '明日國際 TMIC')}"></div>
+      <label class="chk"><input type="checkbox" id="qstamp" ${q.stampOn !== false ? 'checked' : ''}> 蓋「報價專用章」</label>
+    </div>
+  </div>
+  <div class="qstage"><div id="qpaper"></div></div></div>`;
+
+  const setDirty = v => { dirty = v; $('#qdirty').textContent = v ? '● 尚未儲存' : ''; };
+  const paint = () => {
+    const a = qPaperAttrs(q), p = $('#qpaper'); if (!p) return;
+    p.className = a.cls; p.setAttribute('style', a.style); p.innerHTML = qPaperHtml(q);
+    const w = p.parentElement.clientWidth, full = 210 * 96 / 25.4;
+    p.style.zoom = w < full + 10 ? Math.max(.35, (w - 10) / full) : 1;
+  };
+  const changed = () => { setDirty(true); paint(); };
+  const drawSigned = () => {
+    $('#qsigned').innerHTML = q.signed.length ? q.signed.map((f, i) => `<div class="qfile"><a href="${esc(f.url)}" target="_blank" rel="noopener">📄 ${esc(f.name)}</a><span class="muted">${esc(f.at || '')}</span><button class="small ghost" data-rm="${i}">移除</button></div>`).join('') : '<p class="muted">尚未上傳</p>';
+  };
+  setDirty(dirty); paint(); drawSigned();
+  const ed = qItemsEditor($('#qitems'), q.items, changed);
+  app.querySelectorAll('[data-f]').forEach(el => el.addEventListener('input', () => { q[el.dataset.f] = el.value; changed(); }));
+  $('#qsales').onchange = e => { q.salesEmail = e.target.value; q.sName = qSalesName(q.salesEmail); q.sMail = qMail(q.salesEmail); app.querySelector('[data-f=sMail]').value = q.sMail; changed(); };
+  $('#qwm').onchange = e => { q.wmOn = e.target.checked; changed(); };
+  $('#qstamp').onchange = e => { q.stampOn = e.target.checked; changed(); };
+  $('#qblank').onclick = () => ed.add({ partNo: '', name: '', desc: '', price: 0, qty: 1, disc: 0 });
+  $('#qcat').onchange = e => { const it = qCatalog()[e.target.value]; if (it) ed.add(qCopyItems([it])[0]); e.target.value = ''; };
+  $('#qapply')?.addEventListener('change', e => {
+    const t = tpls.find(x => x.id === e.target.value); e.target.value = ''; if (!t) return;
+    if (!confirm(`改用「${t.name}」？目前的產品項目、付款條件、報價說明會被取代。`)) return;
+    q.items.splice(0, q.items.length, ...qCopyItems(t.items)); q.pay = t.payment || ''; q.terms = qTermsText(t.terms); q.cancel = t.cancel || Q_CANCEL; q.title = t.name; q.tplId = t.id;
+    app.querySelector('[data-f=pay]').value = q.pay; app.querySelector('[data-f=terms]').value = q.terms; ed.draw(); changed();
+  });
+  $('#qcust').onclick = () => pickCustomer(c => {
+    Object.assign(q, { customerId: c.id, customerName: c.name || '', customerNo: custNo(c) || c.leadNo || '', region: c.region || '', cName: c.name || '', cContact: c.contact || '', cTel: c.phone || c.mobile || '', cFax: c.fax || '' });
+    ['cName', 'cContact', 'cTel', 'cFax'].forEach(k => { app.querySelector(`[data-f=${k}]`).value = q[k]; });
+    app.querySelector('.qpanel h2').textContent = q.customerName; changed();
+  });
+  const payload = () => {
+    const o = {}; ['customerId', 'customerName', 'customerNo', 'region', 'title', 'tplId', 'qNo', 'qDate', 'cName', 'cContact', 'cTel', 'cFax', 'salesEmail', 'sName', 'sMail', 'pay', 'terms', 'cancel', 'wmText'].forEach(k => { o[k] = q[k] ?? ''; });
+    o.items = q.items.map(x => ({ partNo: x.partNo || '', name: x.name || '', desc: x.desc || '', price: qNum(x.price), qty: qNum(x.qty), disc: qNum(x.disc) }));
+    o.wmOn = q.wmOn !== false; o.stampOn = q.stampOn !== false; o.total = qSum(q); o.totalTax = qTax(q);
+    return o;
+  };
+  const save = async () => {
+    const stamp = { updatedBy: me.email, updatedAt: serverTimestamp() };
+    if (isNew) {
+      const ref = doc(collection(db, 'quotes'));
+      await setDoc(ref, { ...payload(), groupId: ref.id, ver: 1, signed: [], createdBy: me.email, createdAt: serverTimestamp(), ...stamp });
+      qDraft = null; return ref.id;
+    }
+    await updateDoc(doc(db, 'quotes', q.id), { ...payload(), ...stamp });
+    return q.id;
+  };
+  $('#qsave').onclick = async e => {
+    e.target.disabled = true;
+    try { const nid = await save(); setDirty(false); toast('已儲存'); if (isNew) location.hash = '#/quote/' + nid; }
+    catch (err) { toast('儲存失敗：' + errMsg(err), 6000); } finally { e.target.disabled = false; }
+  };
+  $('#qnewver')?.addEventListener('click', async e => {
+    if (!confirm(`以目前畫面的內容另存成 v${Math.max(...versions.map(v => v.ver || 1), q.ver || 1) + 1}？（${qVer(q)} 保持不變${dirty ? '，這次的修改只會存到新版本' : ''}）`)) return;
+    e.target.disabled = true;
+    try {
+      const ver = Math.max(...versions.map(v => v.ver || 1), q.ver || 1) + 1;
+      const ref = doc(collection(db, 'quotes'));
+      await setDoc(ref, { ...payload(), groupId: q.groupId || q.id, ver, signed: [], createdBy: me.email, createdAt: serverTimestamp(), updatedBy: me.email, updatedAt: serverTimestamp() });
+      toast(`已另存為 v${ver}`); location.hash = '#/quote/' + ref.id;
+    } catch (err) { toast('另存失敗：' + errMsg(err), 6000); e.target.disabled = false; }
+  });
+  $('#qprint').onclick = () => qPrint(q);
+  $('#qdel')?.addEventListener('click', async () => {
+    if (!confirm(`確定刪除 ${qVer(q)}？${q.signed.length ? '\n（這個版本有簽回掃描檔，雲端檔案不會被刪，但這裡的連結會消失）' : ''}`)) return;
+    try {
+      await deleteDoc(doc(db, 'quotes', q.id)); toast('已刪除');
+      const rest = versions.filter(v => v.id !== q.id);
+      location.hash = rest.length ? '#/quote/' + rest[0].id : '#/quotes';
+    } catch (err) { toast('刪除失敗：' + errMsg(err), 6000); }
+  });
+  $('#qup').onchange = async e => {
+    const files = [...e.target.files]; if (!files.length) return;
+    if (isNew || dirty) { if (!confirm('上傳前需要先儲存目前內容，要儲存嗎？')) { e.target.value = ''; return; } }
+    try {
+      let qid = q.id;
+      if (isNew || dirty) { qid = await save(); setDirty(false); }
+      toast('上傳中…', 20000);
+      for (const f of files) {
+        const r = await uploadFile(f, 'purchase', q.customerNo || q.customerId || '未編號');
+        q.signed.push({ name: r.name, url: r.url, at: ymdOf(new Date()), by: me.email });
+      }
+      await updateDoc(doc(db, 'quotes', qid), { signed: q.signed, updatedBy: me.email, updatedAt: serverTimestamp() });
+      toast('已上傳'); if (isNew) location.hash = '#/quote/' + qid; else drawSigned();
+    } catch (err) { toast('上傳失敗：' + errMsg(err), 8000); }
+    e.target.value = '';
+  };
+  $('#qsigned').onclick = async e => {
+    const i = e.target.dataset.rm; if (i === undefined) return;
+    if (!confirm(`移除「${q.signed[i].name}」的連結？（雲端上的檔案不會被刪）`)) return;
+    const next = q.signed.filter((_, j) => j !== +i);
+    try { await updateDoc(doc(db, 'quotes', q.id), { signed: next, updatedBy: me.email, updatedAt: serverTimestamp() }); q.signed = next; drawSigned(); toast('已移除'); }
+    catch (err) { toast(errMsg(err)); }
+  };
+  window.addEventListener('resize', paint, { once: true });
+}
+
+// 客戶頁：這位客戶的報價單（管理者）
+async function showQuotesForCustomer(c) {
+  const box = $('#quoteBox'); if (!box) return;
+  let list;
+  try { list = qLatest((await getDocs(query(collection(db, 'quotes'), where('customerId', '==', c.id)))).docs.map(d => ({ id: d.id, ...d.data() }))); }
+  catch (e) { box.innerHTML = `<div class="card"><p class="muted">報價單載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  if (!$('#quoteBox')) return;
+  box.innerHTML = `<div class="card"><div class="sec-head"><h2 style="margin:0">報價單</h2><span class="spacer"></span><button class="small" id="cqAdd">＋ 新增報價單</button></div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>報價日期</th><th>報價單號</th><th>內容</th><th>版本</th><th>總計（含稅）</th><th>狀態</th></tr></thead><tbody class="click" id="cqBody">${list.map(x => `<tr data-id="${esc(x.id)}"><td>${esc(x.qDate)}</td><td>${esc(x.qNo)}</td><td>${esc(x.title)}</td><td>${qVer(x)}</td><td>${qMoney(qTax(x))}</td><td>${x._signedAny ? '<span class="tag formal">已簽回</span>' : '<span class="muted">未簽回</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">還沒有報價單</p>'}</div>`;
+  box.querySelector('#cqAdd').onclick = () => qNew(c);
+  box.querySelector('#cqBody')?.addEventListener('click', e => { const id = e.target.closest('[data-id]')?.dataset.id; if (id) location.hash = '#/quote/' + id; });
+}
+
+// ---- 報價範本管理 ----
+async function viewQuoteTpls() {
+  app.innerHTML = '<div class="card"><p class="muted">載入範本中…</p></div>';
+  let list;
+  try { list = await loadQTpl(true); } catch (e) { app.innerHTML = `<div class="card"><p>範本載入失敗：${esc(errMsg(e))}</p></div>`; return; }
+  const g = {}; list.forEach(t => (g[t.group || '其他'] = g[t.group || '其他'] || []).push(t));
+  app.innerHTML = `<div class="custnav"><a href="#/quotes">← 報價單列表</a></div><div class="card"><h1>報價範本</h1>
+    <p class="muted">範本的產品、價格、規格說明、付款條件、報價說明都可以改。新增報價單時選範本，就會帶入這些內容；「產品庫」是所有範本裡的產品整理出來的。改範本不會影響已經建立的報價單。</p>
+    <div class="toolbar"><button id="tAdd">＋ 新增範本</button><label class="ghost" style="display:inline-flex;align-items:center;gap:6px">匯入範本 JSON：<input type="file" id="tImp" accept=".json,application/json" style="max-width:240px"></label></div>
+    ${Object.entries(g).map(([k, a]) => `<h2 style="margin-top:18px">${esc(k)}</h2><div class="tablewrap"><table><thead><tr><th>範本名稱</th><th>項目</th><th>合計（未稅）</th><th></th></tr></thead><tbody>${a.map(t => `<tr data-id="${esc(t.id)}"><td>${esc(t.name)}</td><td>${(t.items || []).map(x => esc(x.partNo)).join('、')}</td><td>${qMoney(qSum(t))}</td>
+      <td class="row-actions"><button class="small ghost" data-a="edit">編輯</button><button class="small ghost" data-a="copy">複製</button><button class="small danger" data-a="del">刪除</button></td></tr>`).join('')}</tbody></table></div>`).join('') || '<p class="muted">還沒有範本。請用上面的「匯入範本 JSON」匯入 Claude 給你的 quote_templates.json。</p>'}</div>`;
+  $('#tAdd').onclick = () => qTplForm(null);
+  app.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('click', async e => {
+    const a = e.target.dataset.a; if (!a) return;
+    const t = list.find(x => x.id === tr.dataset.id);
+    if (a === 'edit') qTplForm(t);
+    if (a === 'copy') qTplForm({ ...t, id: null, name: t.name + '（複製）' });
+    if (a === 'del') {
+      if (!confirm(`確定刪除範本「${t.name}」？（已建立的報價單不受影響）`)) return;
+      try { await deleteDoc(doc(db, 'quoteTemplates', t.id)); toast('已刪除'); viewQuoteTpls(); } catch (err) { toast(errMsg(err)); }
+    }
+  }));
+  $('#tImp').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    let arr;
+    try { arr = JSON.parse(await f.text()); if (!Array.isArray(arr)) throw new Error('格式不對'); } catch (err) { toast('檔案讀取失敗：' + errMsg(err)); e.target.value = ''; return; }
+    const exist = new Set(list.map(t => (t.group || '') + '|' + t.name));
+    const add = arr.filter(t => t && t.name && !exist.has((t.group || '') + '|' + t.name));
+    if (!add.length) { toast('沒有新的範本（同名的已略過）'); e.target.value = ''; return; }
+    if (!confirm(`要匯入 ${add.length} 個範本嗎？${arr.length - add.length ? `（${arr.length - add.length} 個同名的會略過）` : ''}`)) { e.target.value = ''; return; }
+    try {
+      let order = list.reduce((m, t) => Math.max(m, t.order ?? 0), 0);
+      for (let i = 0; i < add.length; i += 400) {
+        const b = writeBatch(db);
+        add.slice(i, i + 400).forEach(t => b.set(doc(collection(db, 'quoteTemplates')), { group: t.group || '其他', name: t.name, order: ++order, payment: t.payment || '', terms: qTermsText(t.terms), cancel: t.cancel || Q_CANCEL, items: qCopyItems(t.items), updatedBy: me.email, updatedAt: serverTimestamp() }));
+        await b.commit();
+      }
+      toast(`已匯入 ${add.length} 個範本`); viewQuoteTpls();
+    } catch (err) { toast('匯入失敗：' + errMsg(err), 8000); }
+  };
+}
+function qTplForm(t) {
+  const isNew = !t?.id;
+  const cur = { group: t?.group || '', name: t?.name || '', payment: t?.payment || '合約簽定，貨到一次付清(即期支票)。', terms: qTermsText(t?.terms), cancel: t?.cancel || Q_CANCEL, items: qCopyItems(t?.items) };
+  const groups = [...new Set((qTplCache || []).map(x => x.group).filter(Boolean))];
+  const dlg = document.createElement('dialog'); dlg.className = 'wide';
+  dlg.innerHTML = `<form><h1>${isNew ? '新增範本' : '編輯範本'}</h1><div class="grid">
+      <div class="field"><label>分類</label><input name="group" value="${esc(cur.group)}" list="tg"><datalist id="tg">${groups.map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="field"><label>範本名稱 *</label><input name="name" value="${esc(cur.name)}"></div>
+      <div class="field full"><label>付款條件</label><input name="payment" value="${esc(cur.payment)}"></div>
+      <div class="field full"><label>報價說明（一行一條）</label><textarea name="terms" rows="4">${esc(cur.terms)}</textarea></div>
+      <div class="field full"><label>訂單簽回說明</label><textarea name="cancel" rows="2">${esc(cur.cancel)}</textarea></div></div>
+    <div class="sec-head" style="margin-top:14px"><h2 style="margin:0">產品項目</h2><span class="spacer"></span><button type="button" class="small ghost" id="tb">＋空白項目</button></div>
+    <div id="ti"></div>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="ghost" id="tc">取消</button><button type="submit">儲存</button></div></form>`;
+  document.body.appendChild(dlg);
+  const ed = qItemsEditor(dlg.querySelector('#ti'), cur.items, () => {});
+  dlg.querySelector('#tb').onclick = () => ed.add({ partNo: '', name: '', desc: '', price: 0, qty: 1, disc: 0 });
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#tc').onclick = close; dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('form').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, name = f.name.value.trim(); if (!name) return toast('請填範本名稱');
+    const data = { group: f.group.value.trim() || '其他', name, payment: f.payment.value.trim(), terms: f.terms.value, cancel: f.cancel.value.trim(),
+      items: cur.items.map(x => ({ partNo: x.partNo || '', name: x.name || '', desc: x.desc || '', price: qNum(x.price), qty: qNum(x.qty), disc: qNum(x.disc) })), updatedBy: me.email, updatedAt: serverTimestamp() };
+    try {
+      if (isNew) await addDoc(collection(db, 'quoteTemplates'), { ...data, order: (qTplCache || []).reduce((m, x) => Math.max(m, x.order ?? 0), 0) + 1 });
+      else await updateDoc(doc(db, 'quoteTemplates', t.id), data);
+      close(); toast('已儲存'); viewQuoteTpls();
+    } catch (err) { toast('儲存失敗：' + errMsg(err), 6000); }
+  };
+  dlg.showModal();
 }
 
 // ---------------- 資料匯入（管理者）----------------
@@ -2359,7 +2847,7 @@ function userForm(u) {
   dlg.innerHTML = `<form id="uf"><h1>${isNew ? '新增人員' : '編輯人員'}</h1>
     <div class="grid">
       <div class="field"><label>Google 帳號（Gmail，登入用）*</label><input name="email" type="email" value="${esc(cur.email)}"></div>
-      <div class="field"><label>公司信箱</label><input name="companyEmail" type="email" value="${esc(cur.companyEmail)}" placeholder="例：name@tmic.com.tw"></div>
+      <div class="field"><label>公司信箱</label><input name="companyEmail" type="email" value="${esc(cur.companyEmail)}" placeholder="例：name@tmic.asia"></div>
       <div class="field"><label>通知信寄到</label><div class="checks"><label><input type="checkbox" name="notifyGmail" ${cur.notifyGmail !== false ? 'checked' : ''}>Gmail</label><label><input type="checkbox" name="notifyCompany" ${cur.notifyCompany ? 'checked' : ''}>公司信箱</label></div><div class="muted">兩個都勾就兩邊都寄</div></div>
       <div class="field"><label>中文名 *</label><input name="nameZh" value="${esc(cur.nameZh)}"></div>
       <div class="field"><label>英文名</label><input name="nameEn" value="${esc(cur.nameEn)}"></div>
