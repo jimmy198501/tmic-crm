@@ -265,7 +265,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-17d</div>
+<div class="ver">版本 2026-10-18a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -410,6 +410,7 @@ onAuthStateChanged(auth, async u => {
   if (unsubNotes) { unsubNotes(); unsubNotes = null; }
   notes = []; renderBell();
   if (timer) { clearInterval(timer); timer = null; }
+  stopSchedLive();
   if (!u) { viewLogin(); return; }
   const email = (u.email || '').toLowerCase();
   let snap = null;
@@ -1472,7 +1473,26 @@ function refreshSchedViews() {
   else if (!location.hash || location.hash.startsWith('#/home')) viewHome();
 }
 let allSchedCache = null; // 搜尋用：全部行程
-const schedCache = new Map(); // 'YYYY-MM' -> [schedules]
+// 行程即時同步：每個月份開一個監聽，第一次讀整月，之後只讀有變動的那幾筆（別人新增／修改／刪除幾秒內就會出現）
+const schedLive = new Map(); // 'YYYY-MM' -> { list, unsub, ready, used }
+const SCHED_LIVE_MAX = 6;    // 最多同時監聽 6 個月，太多就關掉最久沒看的
+const schedCache = {
+  has: ym => schedLive.has(ym), get: ym => schedLive.get(ym)?.list || [],
+  clear() { /* 已經是即時資料，不需要清掉重抓 */ }
+};
+function stopSchedLive() { schedLive.forEach(x => x.unsub?.()); schedLive.clear(); }
+let schedLiveTimer = null;
+function onSchedLiveChange() {
+  allSchedCache = null;
+  clearTimeout(schedLiveTimer);
+  schedLiveTimer = setTimeout(() => {
+    if (!me || document.querySelector('dialog[open]')) return;
+    const a = document.activeElement; if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName)) return; // 正在輸入時不打擾
+    const h = location.hash || '#/home', y = window.scrollY;
+    if (h.startsWith('#/calendar')) viewCalendar(); else if (h.startsWith('#/home')) viewHome(); else return;
+    requestAnimationFrame(() => window.scrollTo(0, y));
+  }, 800);
+}
 const holidayCache = new Map(); // 'YYYY' -> Map(date -> name)
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const ymdOf = d => d.toLocaleDateString('sv-SE');
@@ -1491,12 +1511,27 @@ function afterRecordChange(c) {
   else if (location.hash.startsWith('#/records')) viewRecords();
   else if (c) showRecords(c, true);
 }
-async function loadMonth(ym) {
-  if (schedCache.has(ym)) return schedCache.get(ym);
-  const snap = await getDocs(query(collection(db, 'schedules'), where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')));
-  const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  schedCache.set(ym, list);
-  return list;
+function loadMonth(ym) {
+  const hit = schedLive.get(ym);
+  if (hit) { hit.used = Date.now(); return hit.ok ? Promise.resolve(hit.list) : hit.ready; }
+  if (schedLive.size >= SCHED_LIVE_MAX) { // 關掉最久沒用的月份
+    const [oldK, oldV] = [...schedLive.entries()].sort((a, b) => a[1].used - b[1].used)[0];
+    oldV.unsub?.(); schedLive.delete(oldK);
+  }
+  const ent = { list: [], used: Date.now(), unsub: null, ready: null, ok: false };
+  ent.ready = new Promise((resolve, reject) => {
+    let first = true;
+    ent.unsub = onSnapshot(query(collection(db, 'schedules'), where('date', '>=', ym + '-01'), where('date', '<=', ym + '-31')), snap => {
+      ent.list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (first) { first = false; ent.ok = true; resolve(ent.list); }
+      else if (snap.docChanges().length) onSchedLiveChange();
+    }, err => {
+      schedLive.delete(ym);
+      if (first) { first = false; reject(err); }
+    });
+  });
+  schedLive.set(ym, ent);
+  return ent.ready;
 }
 // 台灣國定假日（資料來源：行政院人事行政總處辦公日曆表，ruyut/TaiwanCalendar 整理）
 async function loadHolidays(year) {
