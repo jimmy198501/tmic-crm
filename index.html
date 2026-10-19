@@ -265,7 +265,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-18a</div>
+<div class="ver">版本 2026-10-19b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -307,6 +307,16 @@ let timer = null;
 const ui = { status: 'all', region: '', sales: '', q: '', sort: 'no', dir: 1 };
 
 const $ = s => document.querySelector(s);
+// 選檔案視窗按「取消」時，瀏覽器會送出 cancel 事件並往上傳到對話框，導致對話框被關掉、輸入的內容不見；在這裡攔下來
+document.addEventListener('cancel', e => { if (e.target instanceof HTMLInputElement && e.target.type === 'file') e.stopPropagation(); }, true);
+// 編輯視窗有改過內容時，按 Esc 先確認，避免不小心關掉
+const markDirty = e => { const d = e.target.closest?.('dialog'); if (d && d.querySelector('form') && e.target.closest('form')) d.dataset.dirty = '1'; };
+document.addEventListener('input', markDirty, true);
+document.addEventListener('change', e => { if (!(e.target instanceof HTMLInputElement && e.target.type === 'file') || e.target.files.length) markDirty(e); }, true);
+document.addEventListener('cancel', e => {
+  const d = e.target; if (!(d instanceof HTMLDialogElement) || d.dataset.dirty !== '1') return;
+  if (!confirm('內容還沒儲存，確定要關閉嗎？')) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
 const app = $('#app');
 // 24 小時制時間選擇（時：分），存成 HH:MM；「時」選空白＝不填
 function timeInput(name, val) {
