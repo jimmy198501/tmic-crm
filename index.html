@@ -175,6 +175,14 @@ select.fon{border-color:var(--purple);color:var(--purple);font-weight:500}
 @media (max-width:640px){.cal .dc{min-height:64px}.ev{font-size:10px;padding:1px 3px}.panel{position:fixed;left:8px;right:8px;top:96px;width:auto}}
 td.wrap{white-space:pre-wrap;min-width:300px}
 td.cust{white-space:normal;min-width:160px;max-width:280px}
+/* 紀錄頁：欄位跟著螢幕寬度換行，不用一直往右拉 */
+table.rfit td{white-space:normal;overflow-wrap:anywhere}
+table.rfit td.wrap{white-space:pre-wrap;min-width:180px}
+table.rfit td.cust{min-width:120px}
+table.rfit td:nth-child(2),table.rfit td.nw{white-space:nowrap}
+table.rfit td.row-actions{white-space:nowrap;width:1%}
+table.rfit td.row-actions button{margin-right:4px}
+table.rfit td.files a{display:block}
 th{position:relative}
 .colrs{position:absolute;top:0;right:-4px;bottom:0;width:9px;cursor:col-resize;z-index:2}
 .colrs:hover,.colrs.on{background:linear-gradient(to right,transparent 3px,var(--purple) 3px,var(--purple) 5px,transparent 5px)}
@@ -265,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-19b</div>
+<div class="ver">版本 2026-10-20a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -2020,7 +2028,7 @@ async function viewRecords() {
     if (f === 'files') return `<td class="files">${(r.files || []).map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)}</a>`).join('') || '—'}</td>`;
     if (f === 'link' && r.link) return `<td><a href="${esc(r.link)}" target="_blank" rel="noopener">開啟</a></td>`;
     const v = fn ? fn(r) : r[f];
-    return `<td class="${wrap ? 'wrap' : ''}">${esc(v) || '—'}</td>`;
+    return `<td class="${wrap ? 'wrap' : ['status', 'ticketNo', 'opportunity', 'period'].includes(f) ? 'nw' : ''}">${esc(v) || '—'}</td>`;
   };
   const isAll = recsUI.ym === 'all';
   const [y, m] = isAll ? [0, 0] : recsUI.ym.split('-').map(Number);
@@ -2045,9 +2053,8 @@ async function viewRecords() {
       return `<div class="toolbar">${fsel('fOpp', 'opp', '全部商機', ['高', '中', '低', '暫無需求'])}${fsel('fPer', 'period', '全部期程', ['短期', '中期', '長期', '暫無需求'])}${fsel('fProd', 'prod', '全部介紹產品', prodOpts)}${recsUI.opp || recsUI.period || recsUI.prod ? '<button class="ghost small" id="fClr">清除篩選</button>' : ''}</div>`;
     })() : ''}
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆${isDemoTab && (recsUI.opp || recsUI.period || recsUI.prod) ? `（已篩選：${[['商機', recsUI.opp], ['期程', recsUI.period], ['介紹產品', recsUI.prod]].filter(x => x[1]).map(([t, v]) => `${t}＝${v === '__none' ? '未填' : esc(v)}`).join('、')}）` : ''}</div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr id="rhead">${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th><th></th></tr></thead>
-    <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}">${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td>
-      <td class="row-actions">${canMoveRec(col) ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
+    ${list.length ? `<div class="tablewrap"><table class="rfit"><thead><tr id="rhead"><th></th>${cols.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${recsUI.sort === k ? `<span class="arrow">${recsUI.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('')}<th class="sortable" data-k="createdBy">建立者</th></tr></thead>
+    <tbody id="rbody">${list.map((it, i) => `<tr data-i="${i}"><td class="row-actions">${R.canEdit(it.r) ? '<button class="ghost small" data-act="edit">編輯</button>' : ''}${canMoveRec(col) ? '<button class="ghost small" data-act="move">改客戶</button>' : ''}${R.canDel(it.r) ? '<button class="danger small" data-act="del">刪除</button>' : ''}</td>${cols.map(col => cell(it, col)).join('')}<td>${esc(salesLabel(it.r.createdBy))}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">${isAll ? '沒有紀錄' : '這個月沒有紀錄'}</p>`}
   </div>`;
   const thisMonth = () => new Date().toLocaleDateString('sv-SE').slice(0, 7);
   const moveM = n => { const d = new Date(y, m - 1 + n, 1); recsUI.ym = d.toLocaleDateString('sv-SE').slice(0, 7); viewRecords(); };
