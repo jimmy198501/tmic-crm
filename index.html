@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-21a</div>
+<div class="ver">版本 2026-10-21b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1141,7 +1141,7 @@ async function lineMsgsDialog(x, onChange) {
     dlg.innerHTML = `<div class="toolbar"><h1 style="margin:0" id="lName">${esc(x.name)}</h1><button class="ghost small" id="lRen">改名稱</button></div>
       <p class="muted">共 ${msgs.length} 則。可編輯內容、刪除，或設為「不算詢問」（不計入客戶詢問天數）。</p>
       <div style="max-height:60vh;overflow:auto" id="lList">${msgs.map(m => { const d = m.date !== last ? `<div class="lday"><b>${esc(m.date)}（${WD[toDate(m.date).getDay()]}）</b><span class="spacer"></span><span class="muted">處理同事</span>
-          <select class="lhand" data-date="${esc(m.date)}" style="width:auto"><option value="">（未註記）</option>${userOptions(['engineer', 'sales', 'manager', 'admin'], (x.handlers || {})[m.date] || '')}</select>
+          <select class="lhand" data-date="${esc(m.date)}" style="width:auto"><option value="">（未註記）</option>${(() => { const h = (x.handlers || {})[m.date] || ''; const o = userOptions(['engineer'], h); return o + (h && !o.includes(`value="${h}"`) ? `<option value="${esc(h)}" selected>${esc(salesLabel(h))}</option>` : ''); })()}</select>
           <button class="ghost small" data-day="ex" data-date="${esc(m.date)}">整天不算詢問</button><button class="danger small" data-day="del" data-date="${esc(m.date)}">刪除這天</button></div>` : ''; last = m.date;
         const off = m.excluded || isStaffName(m.sender);
         return d + `<div class="lmsg ${off ? 'off' : ''}" data-id="${esc(m.id)}"><div class="toolbar" style="margin:0"><b>${esc(m.sender || '（未知）')}</b><span class="muted">${esc(fmtAt(m.at).slice(11))}</span>
@@ -2014,7 +2014,7 @@ async function viewRecords() {
     .filter(({ r }) => !isDemoTab || !recsUI.opp || (recsUI.opp === '__none' ? !r.opportunity : r.opportunity === recsUI.opp))
     .filter(({ r }) => !isDemoTab || !recsUI.period || (recsUI.period === '__none' ? !r.period : r.period === recsUI.period))
     .filter(({ r }) => !isDemoTab || !recsUI.prod || (recsUI.prod === '__none' ? !prodTokens(r.products).length : prodTokens(r.products).includes(recsUI.prod)))
-    .filter(({ r, c }) => !q || [c.name, custNo(c), ...R.cols.map(([f]) => r[f])].some(v => String(v || '').toLowerCase().includes(q)));
+    .filter(({ r, c }) => !q || [c.name, custNo(c), ...R.cols.map(([f]) => r[f]), r.createdBy, salesLabel(r.createdBy)].some(v => String(v || '').toLowerCase().includes(q)));
   const val = ({ r, c }, k) => k === 'customer' ? (c.name || '') : k === 'createdBy' ? salesLabel(r.createdBy) : String((R.cols.find(x => x[0] === k)?.[2] || (x => x[k]))(r) ?? '');
   // 有固定選項的欄位（商機：高→中→低→暫無需求；期程：短期→中期→長期→暫無需求）照選項順序排，空白一律排最後；同級再依日期新到舊
   const opts = R.fields.find(x => x[0] === recsUI.sort && x[2] === 'list')?.[4];
@@ -2045,7 +2045,7 @@ async function viewRecords() {
       <select id="rRegion"><option value="">全部區域</option>${REGIONS.map(x => `<option ${recsUI.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
       <select id="rSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], recsUI.sales)}</select>
       ${isDemo ? `<select id="rEng"><option value="">全部工程師</option>${userOptions(['engineer'], recsUI.engineer)}</select>` : ''}
-      <input id="rQ" placeholder="搜尋客戶、內容" value="${esc(recsUI.q)}" style="max-width:200px">
+      <input id="rQ" placeholder="搜尋客戶、內容、建立者" value="${esc(recsUI.q)}" style="max-width:200px">
       <button class="ghost small" id="rRefresh">重新整理</button>
     </div>
     ${isDemoTab ? (() => {
