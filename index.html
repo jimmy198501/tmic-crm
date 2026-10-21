@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-20a</div>
+<div class="ver">版本 2026-10-21a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -354,7 +354,7 @@ function setColW(t, i, w) {
   const ths = t.querySelectorAll('thead th'); if (!ths[i]) return;
   const css = w ? w + 'px' : '';
   ths[i].style.width = ths[i].style.minWidth = ths[i].style.maxWidth = css;
-  t.querySelectorAll('tbody tr').forEach(tr => { const td = tr.children[i]; if (td) { td.style.width = td.style.minWidth = td.style.maxWidth = css; td.style.whiteSpace = w ? 'normal' : ''; } });
+  t.querySelectorAll('tbody tr').forEach(tr => { const td = tr.children[i]; if (td) { td.style.width = td.style.minWidth = td.style.maxWidth = css; td.style.whiteSpace = w ? (td.classList.contains('wrap') ? 'pre-wrap' : 'normal') : ''; } });
 }
 function enhanceTables() {
   if (!wideScreen()) return;
