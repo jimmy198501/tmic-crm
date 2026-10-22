@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-22c</div>
+<div class="ver">版本 2026-10-22d</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -2001,7 +2001,7 @@ async function viewRecords() {
   const prodOpts = [...PRODUCT_OPTS, ...[...new Set(typed.flatMap(r => prodTokens(r.products)))].filter(x => !PRODUCT_OPTS.includes(x)).sort()];
   const unlinkedN = typed.filter(r => r.customerId === UNLINKED_ID).length;
   const engTab = col === 'issues' || col === 'installs';
-  const showRegionF = col !== 'purchases', showSalesF = !engTab && col !== 'purchases', showEngF = col === 'demos' || engTab; // 問題追蹤、安裝紀錄只用工程師（建立者）篩選
+  const showRegionF = col === 'demos', showSalesF = !engTab && col !== 'purchases', showEngF = col === 'demos' || engTab; // 問題追蹤、安裝紀錄只用工程師（建立者）篩選
   const list = typed.filter(r => !recsUI.unlinked || r.customerId === UNLINKED_ID).map(r => ({ r, c: recCustomer(r) }))
     .filter(({ r, c }) => !showRegionF || !recsUI.region || (c.region || r.region) === recsUI.region)
     .filter(({ r, c }) => !showSalesF || !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
