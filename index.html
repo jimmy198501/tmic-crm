@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-22a</div>
+<div class="ver">版本 2026-10-22b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -629,7 +629,7 @@ function viewCustomer(id) {
   $('#edit')?.addEventListener('click', () => customerForm(c));
   $('#conv')?.addEventListener('click', () => convertToFormal(c));
   $('#del')?.addEventListener('click', () => deleteCustomer(c));
-  showRecords(c);
+  showRecords(c, true); // 每次打開客戶都重抓紀錄，才看得到別人剛新增的
 }
 
 // ---------------- 新增／編輯客戶 ----------------
@@ -2000,10 +2000,12 @@ async function viewRecords() {
   const isDemoTab = col === 'demos';
   const prodOpts = [...PRODUCT_OPTS, ...[...new Set(typed.flatMap(r => prodTokens(r.products)))].filter(x => !PRODUCT_OPTS.includes(x)).sort()];
   const unlinkedN = typed.filter(r => r.customerId === UNLINKED_ID).length;
+  const engTab = col === 'issues' || col === 'installs';
+  const showSalesF = !engTab, showEngF = col === 'demos' || engTab; // 問題追蹤、安裝紀錄只用工程師（建立者）篩選
   const list = typed.filter(r => !recsUI.unlinked || r.customerId === UNLINKED_ID).map(r => ({ r, c: recCustomer(r) }))
     .filter(({ r, c }) => !recsUI.region || (c.region || r.region) === recsUI.region)
-    .filter(({ r, c }) => !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
-    .filter(({ r }) => !recsUI.engineer || r.engineerEmail === recsUI.engineer)
+    .filter(({ r, c }) => !showSalesF || !recsUI.sales || (r.salesEmail || c.salesEmail) === recsUI.sales)
+    .filter(({ r }) => !showEngF || !recsUI.engineer || (col === 'demos' ? r.engineerEmail : r.createdBy) === recsUI.engineer)
     .filter(({ r }) => !isDemoTab || !recsUI.opp || (recsUI.opp === '__none' ? !r.opportunity : r.opportunity === recsUI.opp))
     .filter(({ r }) => !isDemoTab || !recsUI.period || (recsUI.period === '__none' ? !r.period : r.period === recsUI.period))
     .filter(({ r }) => !isDemoTab || !recsUI.prod || (recsUI.prod === '__none' ? !prodTokens(r.products).length : prodTokens(r.products).includes(recsUI.prod)))
@@ -2036,8 +2038,8 @@ async function viewRecords() {
       ${seesAllRecs() && (unlinkedN || recsUI.unlinked) ? `<button class="small ${recsUI.unlinked ? '' : 'ghost'}" id="rUnl">⚠ 未連結客戶 ${unlinkedN} 筆</button>` : ''}
       <span class="spacer"></span>
       <select id="rRegion"><option value="">全部區域</option>${REGIONS.map(x => `<option ${recsUI.region === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
-      <select id="rSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], recsUI.sales)}</select>
-      ${isDemo ? `<select id="rEng"><option value="">全部工程師</option>${userOptions(['engineer'], recsUI.engineer)}</select>` : ''}
+      ${showSalesF ? `<select id="rSales"><option value="">全部業務</option>${userOptions(['sales', 'manager'], recsUI.sales)}</select>` : ''}
+      ${showEngF ? `<select id="rEng"><option value="">全部工程師</option>${userOptions(['engineer'], recsUI.engineer)}</select>` : ''}
       <input id="rQ" placeholder="搜尋客戶、內容、建立者" value="${esc(recsUI.q)}" style="max-width:200px">
       <button class="ghost small" id="rRefresh">重新整理</button>
     </div>
@@ -2057,7 +2059,7 @@ async function viewRecords() {
   $('#rUnl')?.addEventListener('click', () => { recsUI.unlinked = !recsUI.unlinked; if (recsUI.unlinked) recsUI.ym = 'all'; viewRecords(); });
   $('#rtabs').onclick = e => { const t = e.target.dataset.t; if (t) { recsUI.tab = t; viewRecords(); } };
   $('#rRegion').onchange = e => { recsUI.region = e.target.value; viewRecords(); };
-  $('#rSales').onchange = e => { recsUI.sales = e.target.value; viewRecords(); };
+  if ($('#rSales')) $('#rSales').onchange = e => { recsUI.sales = e.target.value; viewRecords(); };
   if ($('#rEng')) $('#rEng').onchange = e => { recsUI.engineer = e.target.value; viewRecords(); };
   $('#rQ').onchange = e => { recsUI.q = e.target.value; viewRecords(); };
   if ($('#fOpp')) {
