@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-21b</div>
+<div class="ver">版本 2026-10-22a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -510,7 +510,7 @@ function renderNav() {
   const h = location.hash || '#/home';
   const items = [['#/home', '首頁'], ['#/customers', '客戶'], ['#/records', '紀錄'], ['#/calendar', '行事曆']];
   if (isAdmin() || isEngineer()) items.push(['#/line', 'LINE']);
-  if (isAdmin()) items.push(['#/quotes', '報價單'], ['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
+  if (isAdmin()) items.push(['#/users', '人員管理'], ['#/settings', '編號設定'], ['#/import', '資料匯入']);
   $('#nav').innerHTML = items.map(([href, t]) => {
     const on = h.startsWith(href) || (href === '#/customers' && h.startsWith('#/customer/')) || (href === '#/quotes' && h.startsWith('#/quote/'));
     return `<a href="${href}" class="${on ? 'active' : ''}">${t}</a>`;
@@ -525,8 +525,6 @@ function route() {
   else if (page === 'calendar') viewCalendar();
   else if (page === 'records') viewRecords();
   else if (page === 'line' && (isAdmin() || isEngineer())) viewLine();
-  else if (page === 'quotes' && isAdmin()) (id === 'tpl' ? viewQuoteTpls() : viewQuotes());
-  else if (page === 'quote' && id && isAdmin()) viewQuote(decodeURIComponent(id));
   else if (page === 'users' && isAdmin()) viewUsers();
   else if (page === 'settings' && isAdmin()) viewSettings();
   else if (page === 'import' && isAdmin()) viewImport();
@@ -622,18 +620,15 @@ function viewCustomer(id) {
       ${c.status === 'formal' ? f('正式編號', c.formalNo) : ''}${f('潛在編號', c.leadNo)}${f('區域', c.region)}${f('負責業務', salesLabel(c.salesEmail))}
       ${COMMON.slice(1).map(([k, t]) => k === 'address' && c.address ? `<div class="field"><label>${t}</label><div class="val">${mapLink(c.address)}</div></div>` : k === 'website' && c.website ? `<div class="field"><label>${t}</label><div class="val"><a href="${esc(/^https?:\/\//i.test(c.website) ? c.website : 'https://' + c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div></div>` : f(t, c[k])).join('')}
     </div>
-    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${(() => { const mi = maintInfo(c); return mi ? `<div class="field"><label>維護日期</label><div class="val">${esc(c.maintenanceDate)} ${maintTag(mi)}</div></div><div class="field"><label>維護追蹤狀態</label><div class="val">${maintSelect(c)}</div></div>` : f('維護日期', c.maintenanceDate); })()}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
+    ${c.status === 'formal' ? `<h2 style="margin-top:20px">產品與授權</h2><div class="grid">${f('授權方式', lic)}${f('維護日期', c.maintenanceDate)}<div class="field full"><label>購買產品</label><div class="val">${esc(c.purchasedProduct) || '<span class="muted">—</span>'}</div></div></div>` : ''}
   </div>
   <div id="records"><div class="card"><p class="muted">載入紀錄中…</p></div></div>
-  ${isAdmin() ? '<div id="quoteBox"></div>' : ''}
   ${isAdmin() || isEngineer() ? '<div id="lineBox"></div>' : ''}`;
-  if (isAdmin()) showQuotesForCustomer(c);
   if (isAdmin() || isEngineer()) showLineForCustomer(c);
   app.querySelectorAll('a.navc').forEach(a => a.addEventListener('click', () => window.scrollTo(0, 0)));
   $('#edit')?.addEventListener('click', () => customerForm(c));
   $('#conv')?.addEventListener('click', () => convertToFormal(c));
   $('#del')?.addEventListener('click', () => deleteCustomer(c));
-  bindMaint(app);
   showRecords(c);
 }
 
@@ -1386,14 +1381,12 @@ async function viewHome() {
       return (al.length || isAdmin()) ? `<div class="board" id="annBoard"><div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">📌 公布欄</h2>${un ? `<span class="muted">${un} 則未讀</span>` : ''}<span class="spacer"></span>
         ${isAdmin() ? '<button class="ghost small" id="annAdd">＋ 發布公告</button>' : ''}${al.length > 3 ? `<button class="ghost small" id="annAll">看全部（${al.length}）</button>` : ''}</div>
         ${al.slice(0, 3).map(annRow).join('') || '<p class="muted">還沒有公告</p>'}</div>` : ''; })()}
-    ${maintHomeHtml()}
     <div class="hdays">${days.map((d, i) => `<div class="hday ${i === 0 ? 'today' : ''}"><h3>${names[i]} ${Number(d.slice(5, 7))}/${Number(d.slice(8))}（${WD[toDate(d).getDay()]}）</h3>
       ${hol.has(d) ? `<span class="ev holiday" style="display:inline-block;margin-bottom:6px">${esc(hol.get(d))}</span>` : ''}
       ${byDay[i].map(item).join('') || '<p class="muted">沒有行程</p>'}</div>`).join('')}</div>
     <p class="muted" style="margin-top:10px">只列跟你有關的：你是業務、工程師或建立者的行程，加上你的私人待辦。點任一筆可開啟詳細。</p>
   </div>`;
   $('#hAdd').onclick = () => scheduleForm(null, { date: days[0] });
-  bindMaint(app);
   $('#annAdd')?.addEventListener('click', () => annForm(null));
   $('#annAll')?.addEventListener('click', annList);
   $('#annBoard')?.addEventListener('click', e => { const row = e.target.closest('[data-ann]'); if (!row) return; const a = (annCache || []).find(y => y.id === row.dataset.ann); if (a) annDetail(a); });
