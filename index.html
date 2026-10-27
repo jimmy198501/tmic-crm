@@ -273,7 +273,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-22d</div>
+<div class="ver">版本 2026-10-27a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1464,7 +1464,7 @@ function bindMaint(root) {
 
 // ---------------- 行事曆 ----------------
 // 行程類型（舊資料的 sales／engineer 都視為 Demo）
-const SCHED_OPTS = { demo: 'Demo', install: '裝機交貨', support: '技術支持', class: '上課', leave: '休假', other: '其他' };
+const SCHED_OPTS = { demo: 'Demo', install: '裝機交貨', support: '技術支持', class: '上課', meeting: '會議', leave: '休假', other: '其他' };
 const SCHED_TYPE = { ...SCHED_OPTS, sales: 'Demo', engineer: 'Demo' };
 const stype = x => (x.type === 'sales' || x.type === 'engineer') ? 'demo' : x.type;
 const cal = { view: 'month', cursor: new Date().toLocaleDateString('sv-SE'), region: '', person: '', type: '', q: '', weekStart: 0 };
@@ -2718,6 +2718,7 @@ function parseGcalEvent(e) {
   else if (/demo/i.test(title)) type = 'demo';
   else if (/裝機|交貨|安裝/.test(title)) type = 'install';
   else if (/技術支援|技術支持|遠端/.test(title)) type = 'support';
+  else if (/會議|meeting/i.test(title)) type = 'meeting';
   const regOf = u => u ? (userRegions(u).length === 1 ? userRegions(u)[0] : '') : '';
   const region = regOf(sales) || regOf(eng) || (['9', '1'].includes(e.color) ? '台北' : '');
   const content = String(e.content || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
