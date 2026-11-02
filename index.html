@@ -114,6 +114,9 @@ tr.left td{color:#9aa}
 .wk-times span:first-child{transform:none}
 .wk-col{position:relative;border-left:1px solid var(--line);cursor:pointer;background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 60px)}
 .wk-col.today{background-color:#f7f8fe}
+.dropon{outline:2px dashed var(--purple);outline-offset:-2px;background:#f6eef8!important}
+.ev[draggable=true],.tev[draggable=true]{cursor:grab}
+.dragging{opacity:.45}
 .tev{position:absolute;border-radius:6px;padding:3px 6px;color:#fff;font-size:12px;line-height:1.35;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px #fff;display:flex;flex-direction:column}
 .tev b{font-weight:500;overflow:hidden;text-overflow:ellipsis}
 .tev.short{justify-content:center;padding:1px 6px}
@@ -273,7 +276,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-10-27a</div>
+<div class="ver">版本 2026-11-02a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1584,7 +1587,7 @@ async function viewCalendar() {
   const cur = toDate(cal.cursor);
   const title = cal.view === 'week' ? `${s0} ～ ${s1}` : `${cur.getFullYear()} 年 ${cur.getMonth() + 1} 月`;
   const today = ymdOf(new Date());
-  const chip = x => `<span class="ev ${evColor(x)}" data-sid="${esc(x.id)}" title="${esc(x.title)}">${x._private ? '🔒 ' : ''}${x.startTime ? esc(x.startTime) + ' ' : ''}${x.tentative ? '【暫定】' : ''}${esc(x.title)}</span>`;
+  const chip = x => `<span class="ev ${evColor(x)}" data-sid="${esc(x.id)}" draggable="true" title="${esc(x.title)}">${x._private ? '🔒 ' : ''}${x.startTime ? esc(x.startTime) + ' ' : ''}${x.tentative ? '【暫定】' : ''}${esc(x.title)}</span>`;
   let body = '';
   if (cal.view === 'list') {
     const hols = [...hol].filter(([d]) => d >= s0 && d <= s1);
@@ -1616,7 +1619,7 @@ async function viewCalendar() {
     <div class="toolbar"><input id="cQ" placeholder="🔍 搜尋全部行程：標題、內容、地點、人員" style="max-width:360px"><span class="spacer"></span>${cal.view !== 'list' ? `<label class="checks" style="font-size:14px"><span style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="wkMon" style="width:auto" ${cal.weekStart === 1 ? 'checked' : ''}>週一開始</span></label>` : ''}</div>
     <div class="muted" style="margin-bottom:8px">共 ${list.length} 筆行程</div>
     ${body}
-    <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span><span class="priv">🔒 私人</span><span class="plain">斜紋＝暫定</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span>' : ''}</div>
+    <div class="legend"><span class="north">北區</span><span class="midsouth">中區／南區</span><span class="leave">休假</span><span class="holiday">國定假日</span><span class="none">未分區</span><span class="priv">🔒 私人</span><span class="plain">斜紋＝暫定</span>${cal.view !== 'list' ? '<span class="plain">點空白日期可新增行程</span><span class="plain">拖曳行程＝移動，按住 Ctrl 拖曳＝複製</span>' : ''}</div>
   </div>`;
   const move = n => { const c0 = toDate(cal.cursor); cal.cursor = ymdOf(cal.view === 'week' ? addDays(c0, 7 * n) : new Date(c0.getFullYear(), c0.getMonth() + n, 1)); viewCalendar(); };
   $('#prev').onclick = () => move(-1); $('#next').onclick = () => move(1);
@@ -1647,6 +1650,63 @@ async function viewCalendar() {
     }
     const day = e.target.closest('.dc, .wk-ad')?.dataset.day;
     if (day) scheduleForm(null, { date: day });
+  });
+  if (cal.view !== 'list') bindSchedDrag(app.querySelector('.card'), list);
+}
+
+// ---- 拖曳行程：直接拖＝移動；按住 Ctrl（Mac 按 Option）放開＝複製 ----
+const hmOf = n => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
+function bindSchedDrag(root, list) {
+  let drag = null; // { x, grabPx }
+  const isCopy = e => e.ctrlKey || e.altKey || e.metaKey;
+  const clearOn = () => root.querySelectorAll('.dropon').forEach(el => el.classList.remove('dropon'));
+  root.addEventListener('dragstart', e => {
+    const el = e.target.closest?.('[data-sid]'); if (!el) return;
+    const x = list.find(y => y.id === el.dataset.sid); if (!x) return;
+    drag = { x, grabPx: el.classList.contains('tev') ? e.clientY - el.getBoundingClientRect().top : 0 };
+    e.dataTransfer.effectAllowed = 'copyMove';
+    e.dataTransfer.setData('text/plain', x.id);
+    el.classList.add('dragging');
+  });
+  root.addEventListener('dragend', e => { e.target.classList?.remove('dragging'); clearOn(); drag = null; });
+  root.addEventListener('dragover', e => {
+    if (!drag) return;
+    const t = e.target.closest('.dc, .wk-ad, .wk-col'); if (!t) return;
+    e.preventDefault();
+    const copy = isCopy(e) || !canEditSched(drag.x);
+    e.dataTransfer.dropEffect = copy ? 'copy' : 'move';
+    if (!t.classList.contains('dropon')) { clearOn(); t.classList.add('dropon'); }
+  });
+  root.addEventListener('drop', async e => {
+    if (!drag) return;
+    const t = e.target.closest('.dc, .wk-ad, .wk-col'); if (!t) return;
+    e.preventDefault(); clearOn();
+    const x = drag.x, copy = isCopy(e) || !canEditSched(x); drag.dropY = e.clientY;
+    const nd = t.dataset.day, shift = Math.round((toDate(nd) - toDate(x.date)) / 864e5);
+    const next = { date: nd, endDate: x.endDate ? ymdOf(addDays(toDate(x.endDate), shift)) : '', startTime: x.startTime || '', endTime: x.endTime || '' };
+    if (t.classList.contains('wk-col')) { // 週檢視時間軸：依放開的位置決定開始時間（15 分鐘一格）
+      const dur = x.startTime ? (x.endTime ? toMin(x.endTime) - toMin(x.startTime) : 0) : 60;
+      const y = e.clientY - t.getBoundingClientRect().top - drag.grabPx;
+      let m = Number(t.dataset.h0) * 60 + Math.round(y / WK_H * 4) * 15;
+      m = Math.max(0, Math.min(m, 24 * 60 - Math.max(dur, 15)));
+      next.startTime = hmOf(m); next.endTime = dur ? hmOf(Math.min(m + dur, 23 * 60 + 59)) : '';
+      if (!x.endDate || x.endDate === x.date) next.endDate = '';
+    }
+    drag = null;
+    const same = next.date === x.date && (next.endDate || '') === (x.endDate || '') && next.startTime === (x.startTime || '') && next.endTime === (x.endTime || '');
+    if (copy) {
+      const preset = {}; SCHED_FIELDS.forEach(k => { preset[k] = x[k] || ''; });
+      return scheduleForm(null, { ...preset, ...next, _private: !!x._private, tentative: !!x.tentative });
+    }
+    if (same) return;
+    const when = `${next.date}（${WD[toDate(next.date).getDay()]}）${next.startTime ? ' ' + next.startTime + (next.endTime ? '～' + next.endTime : '') : ''}`;
+    if (!confirm(`把「${x.title}」移到 ${when}？`)) return;
+    try {
+      await updateDoc(doc(db, x._private ? 'privateSchedules' : 'schedules', x.id), { ...next, updatedBy: me.email, updatedAt: serverTimestamp() });
+      toast('已移動');
+      if (!x._private && !x.tentative) gcalSync([x.id], true).catch(err => toast('Google 日曆同步失敗：' + errMsg(err), 8000));
+      refreshSchedViews();
+    } catch (err) { toast('移動失敗：' + errMsg(err), 6000); }
   });
 }
 
@@ -1685,7 +1745,7 @@ function weekGrid(start, end, list, hol, today, chip) {
       const top = (o.s0 - h0 * 60) / 60 * WK_H, ht = Math.max((o.e0 - o.s0) / 60 * WK_H - 2, 20);
       const short = ht < 46, tip = `${o.x.title}\n${timeText(o.x)}${o.x.place ? '\n' + o.x.place : ''}`;
       const name = `${o.x._private ? '🔒 ' : ''}${o.x.tentative ? '【暫定】' : ''}${esc(o.x.title)}`;
-      return `<div class="tev ${evColor(o.x)} ${short ? 'short' : ''}" data-sid="${esc(o.x.id)}" title="${esc(tip)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)">${short
+      return `<div class="tev ${evColor(o.x)} ${short ? 'short' : ''}" data-sid="${esc(o.x.id)}" draggable="true" title="${esc(tip)}" style="top:${top}px;height:${ht}px;left:calc(${o.c} * 100% / ${o.n});width:calc(100% / ${o.n} - 3px)">${short
         ? `<b><span class="tt">${esc(o.x.startTime)}</span> ${name}</b>`
         : `<b>${name}</b><span>${esc(timeText(o.x))}</span>${o.x.place ? `<span>${esc(o.x.place)}</span>` : ''}`}</div>`;
     }).join('')}${d === today && nowMin >= h0 * 60 && nowMin <= h1 * 60 ? `<div class="wk-now" style="top:${(nowMin - h0 * 60) / 60 * WK_H}px"></div>` : ''}</div>`).join('')}</div>
