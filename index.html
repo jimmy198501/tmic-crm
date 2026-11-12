@@ -279,7 +279,7 @@ dialog.mapsheet .btn{background:var(--navy);color:#fff}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-12b</div>
+<div class="ver">版本 2026-11-12c</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -410,6 +410,19 @@ document.addEventListener('click', e => {
     <button class="ghost" type="button">取消</button>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
+  // Apple 地圖：先用 Google 查出精確座標再交給 Apple（Apple 自己查台灣地址常找錯路）；查不到才用文字地址
+  dlg.querySelector('a.btn').addEventListener('click', async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    const btn = ev.currentTarget, fallback = btn.href; btn.textContent = '定位中…';
+    let url = fallback;
+    try {
+      const ck = 'geo:' + q; let g = null;
+      try { g = JSON.parse(localStorage.getItem(ck) || 'null'); } catch (e2) { /* 沒有快取 */ }
+      if (!g) { g = await callScript('geocode', { address: q }); try { localStorage.setItem(ck, JSON.stringify(g)); } catch (e2) { /* 存不了就算了 */ } }
+      if (g && g.lat) url = `https://maps.apple.com/?ll=${g.lat},${g.lng}&q=${encodeURIComponent(appleAddr(q))}`;
+    } catch (e2) { /* 查不到座標就用文字地址 */ }
+    close(); location.href = url;
+  });
   dlg.addEventListener('click', ev => { if (ev.target === dlg || ev.target.tagName === 'BUTTON' || ev.target.tagName === 'A') setTimeout(close, 0); });
   dlg.addEventListener('cancel', () => dlg.remove());
   dlg.showModal();
