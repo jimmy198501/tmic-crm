@@ -279,7 +279,7 @@ dialog.mapsheet .btn{background:var(--navy);color:#fff}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-12a</div>
+<div class="ver">版本 2026-11-12b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -395,13 +395,17 @@ const mapUrl = a => 'https://www.google.com/maps/search/?api=1&query=' + encodeU
 const mapLink = a => a ? `<a class="maplink" href="${mapUrl(a)}" target="_blank" rel="noopener">📍 ${String(a).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))}</a>` : '<span class="muted">—</span>';
 // iPhone／iPad 點地址：讓使用者選 Apple 地圖或 Google 地圖（Android、電腦照舊直接開 Google 地圖）
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// Apple 地圖比較認不得台灣地址裡的「里、鄰、樓層、括號」，先拿掉再查
+const appleAddr = q => String(q).replace(/[（(][^）)]*[）)]/g, '').replace(/^\d{3,6}\s*/, '')
+  .replace(/([區鄉鎮市])[^區鄉鎮市路街道段巷弄號]{1,4}[里村](\d+鄰)?/, '$1').replace(/\d+鄰/, '')
+  .replace(/(\d+號(之\d+)?).*$/, '$1').replace(/\s+/g, '').trim();
 document.addEventListener('click', e => {
   const a = e.target.closest?.('a.maplink'); if (!a || !isIOS) return;
   e.preventDefault();
   const q = new URL(a.href).searchParams.get('query') || a.textContent.replace('📍', '').trim();
   const dlg = document.createElement('dialog'); dlg.className = 'mapsheet';
   dlg.innerHTML = `<p class="muted" style="margin:0 0 12px">${esc(q)}</p>
-    <a class="btn" href="https://maps.apple.com/?q=${encodeURIComponent(q)}">Apple 地圖</a>
+    <a class="btn" href="https://maps.apple.com/?address=${encodeURIComponent(appleAddr(q))}&q=${encodeURIComponent(appleAddr(q))}">Apple 地圖</a>
     <a class="btn" href="${esc(a.href)}" target="_blank" rel="noopener">Google 地圖</a>
     <button class="ghost" type="button">取消</button>`;
   document.body.appendChild(dlg);
