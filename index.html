@@ -263,6 +263,9 @@ select.mst{width:auto;padding:4px 6px;font-size:13px}
 .qstage{overflow:auto;min-width:0;position:sticky;top:80px}
 dialog.wide{max-width:980px}
 @media (max-width:1100px){.qwrap{grid-template-columns:1fr}.qstage{position:static}}
+dialog.mapsheet{max-width:360px;width:calc(100% - 32px);text-align:center}
+dialog.mapsheet .btn,dialog.mapsheet button{display:block;width:100%;margin:8px 0;padding:12px;border-radius:10px;font-size:16px;text-decoration:none;box-sizing:border-box}
+dialog.mapsheet .btn{background:var(--navy);color:#fff}
 </style>
 </head>
 <body>
@@ -276,7 +279,7 @@ dialog.wide{max-width:980px}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-02a</div>
+<div class="ver">版本 2026-11-12a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -389,7 +392,24 @@ let labelPending = false;
 new MutationObserver(() => { if (!labelPending) { labelPending = true; requestAnimationFrame(() => { labelPending = false; labelTables(); enhanceTables(); }); } }).observe(document.body, { childList: true, subtree: true });
 // 地址 → Google 地圖連結（手機會直接開 Google 地圖 App）
 const mapUrl = a => 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(String(a || '').split('\n')[0].trim());
-const mapLink = a => a ? `<a href="${mapUrl(a)}" target="_blank" rel="noopener">📍 ${String(a).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))}</a>` : '<span class="muted">—</span>';
+const mapLink = a => a ? `<a class="maplink" href="${mapUrl(a)}" target="_blank" rel="noopener">📍 ${String(a).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))}</a>` : '<span class="muted">—</span>';
+// iPhone／iPad 點地址：讓使用者選 Apple 地圖或 Google 地圖（Android、電腦照舊直接開 Google 地圖）
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+document.addEventListener('click', e => {
+  const a = e.target.closest?.('a.maplink'); if (!a || !isIOS) return;
+  e.preventDefault();
+  const q = new URL(a.href).searchParams.get('query') || a.textContent.replace('📍', '').trim();
+  const dlg = document.createElement('dialog'); dlg.className = 'mapsheet';
+  dlg.innerHTML = `<p class="muted" style="margin:0 0 12px">${esc(q)}</p>
+    <a class="btn" href="https://maps.apple.com/?q=${encodeURIComponent(q)}">Apple 地圖</a>
+    <a class="btn" href="${esc(a.href)}" target="_blank" rel="noopener">Google 地圖</a>
+    <button class="ghost" type="button">取消</button>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('click', ev => { if (ev.target === dlg || ev.target.tagName === 'BUTTON' || ev.target.tagName === 'A') setTimeout(close, 0); });
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.showModal();
+}, true);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const isAdmin = () => me?.role === 'admin';
 const userRegions = u => Array.isArray(u?.regions) ? u.regions : (u?.region ? [u.region] : []);
