@@ -56,6 +56,14 @@
 - **改了 doPost 會用到的東西，要「部署 → 管理部署作業 → 新版本」**；只改觸發排程用的函式只要儲存。
 - 一次性搬家程式（Notion 序號檔、問題追蹤附件、清除「［Notion 附件：…］」文字）已經跑完，不用再執行。
 
+## 開發環境（Jimmy 的 Windows 電腦）
+
+- 專案資料夾：`D:\OneDrive\文件\TMIC-CRM`（從 GitHub clone，直接 `git push` 上傳，不用再走網頁「Add files via upload」）。
+- 已安裝：Git（`C:\Program Files\Git\cmd\git.exe`）、Node.js LTS（`C:\Program Files\nodejs`）、Playwright＋Chromium（全域安裝在 `%APPDATA%\npm\node_modules`，瀏覽器在 `%LOCALAPPDATA%\ms-playwright`）。工具裝在專案外，**不要在專案裡建 `package.json`／`node_modules`**。
+- 剛裝完的工具可能還不在 PATH，找不到指令就用上面的完整路徑。腳本要用全域 Playwright：`createRequire(process.env.APPDATA + '/npm/node_modules/')` 再 `require('playwright')`。
+- **網路：這台電腦連不到 `registry.npmjs.org`**（HTTPS 逾時；中華電信網路下被導到連不通的節點，這是推論）。裝 npm 套件一律加 `--registry https://registry.yarnpkg.com`。
+- GitHub 登入存在 Windows 認證管理員。如果 push 要求登入，要在使用者的終端機分頁執行，讓瀏覽器授權視窗跳出來。
+
 ## 修改後的檢查
 
 - 抽出 module script 用 `node --check` 檢查語法：
