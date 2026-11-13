@@ -1,0 +1,171 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- 共用判斷 ----
+    function myEmail() { return request.auth.token.email.lower(); }
+    function meDoc() { return /databases/$(database)/documents/users/$(myEmail()); }
+    function isUser() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && exists(meDoc())
+        && get(meDoc()).data.active == true;
+    }
+    function role() { return get(meDoc()).data.role; }
+    function isAdmin() { return isUser() && role() == 'admin'; }
+    function isSales() { return isUser() && role() == 'sales'; }
+    function isEngineer() { return isUser() && role() == 'engineer'; }
+    function isManager() { return isUser() && role() == 'manager'; }
+    // 新格式 regions（多選）；舊帳號只有 region（單選）時也認得
+    function myRegions() { return get(meDoc()).data.get('regions', [get(meDoc()).data.get('region', '')]); }
+
+    // 能不能看某位客戶（給客戶底下的紀錄用）
+    function canReadCustomer(cid) {
+      let c = get(/databases/$(database)/documents/customers/$(cid)).data;
+      return isAdmin()
+        || isEngineer()
+        || ((isSales() || isManager()) && c.salesEmail == myEmail())
+        || (isManager() && c.region in myRegions());
+    }
+
+    // 工程師「改連結客戶」：舊紀錄已標記 movingTo，且新客戶底下已有同一筆，才允許刪除舊位置
+    function movedAway(cid, col, rid) {
+      return resource.data.get('movingTo', '') is string
+        && resource.data.get('movingTo', '') != ''
+        && resource.data.movingTo != cid
+        && exists(/databases/$(database)/documents/customers/$(resource.data.movingTo)/$(col)/$(rid));
+    }
+
+    // ---- 人員白名單：登入者都能看，只有管理者能改 ----
+    match /users/{email} {
+      allow read: if isUser();
+      allow write: if isAdmin();
+    }
+
+    // ---- 客戶：管理者、工程師看全部；業務主管看負責區域＋自己負責的；業務只看負責的；只有管理者能改 ----
+    match /customers/{id} {
+      allow read: if isAdmin()
+                  || isEngineer()
+                  || ((isSales() || isManager()) && resource.data.salesEmail == myEmail())
+                  || (isManager() && resource.data.region in myRegions());
+      allow create, update, delete: if isAdmin();
+      // 維護追蹤狀態：負責業務、該區主管可以改（只能改這幾個欄位）
+      allow update: if ((isSales() || isManager()) && resource.data.salesEmail == myEmail()
+                        || (isManager() && resource.data.region in myRegions()))
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['maintStatus', 'maintStatusFor', 'maintStatusBy', 'maintStatusAt', 'updatedAt'])
+                    && request.resource.data.maintStatusBy == myEmail();
+
+      // 採購紀錄：看得到客戶就能看；只有管理者能新增／修改／刪除
+      match /purchases/{rid} {
+        allow read: if canReadCustomer(id);
+        allow write: if isAdmin();
+      }
+      // 問題追蹤、工程師安裝紀錄：管理者、工程師可新增／修改（工程師互相可改）；只有管理者能刪除
+      match /issues/{rid} {
+        allow read: if canReadCustomer(id);
+        allow create, update: if isAdmin() || isEngineer();
+        allow delete: if isAdmin() || (isEngineer() && movedAway(id, 'issues', rid));
+      }
+      match /installs/{rid} {
+        allow read: if canReadCustomer(id);
+        allow create, update: if isAdmin() || isEngineer();
+        allow delete: if isAdmin() || (isEngineer() && movedAway(id, 'installs', rid));
+      }
+    }
+
+    // ---- 「紀錄」頁跨客戶列出採購、問題追蹤、安裝紀錄：只限管理者、工程師 ----
+    match /{path=**}/purchases/{rid} {
+      allow read: if isAdmin() || isEngineer();
+    }
+    match /{path=**}/issues/{rid} {
+      allow read: if isAdmin() || isEngineer();
+    }
+    match /{path=**}/installs/{rid} {
+      allow read: if isAdmin() || isEngineer();
+    }
+
+    // ---- Demo 紀錄：管理者全部；業務只看自己的業務 Demo；業務主管看自己＋負責區域的業務 Demo；工程師（含兼任）看全部工程師 Demo；業務／業務主管只能填業務 Demo，工程師只能填工程師 Demo（管理者都可）；只能改／刪自己建立的 ----
+    function alsoEngineer() { return get(meDoc()).data.get('alsoEngineer', false) == true; }
+    function canWriteDemoType(d) {
+      return isAdmin()
+        || (d.type == 'sales' && (isSales() || isManager()) && d.salesEmail == myEmail())
+        || (d.type == 'engineer' && (isEngineer() || (isUser() && alsoEngineer())) && d.engineerEmail == myEmail());
+    }
+    match /demos/{id} {
+      allow read: if isAdmin()
+                  || (resource.data.type == 'engineer' && (isEngineer() || (isUser() && alsoEngineer())))
+                  || (resource.data.type == 'sales' && (isSales() || isManager()) && resource.data.salesEmail == myEmail())
+                  || (resource.data.type == 'sales' && isManager() && resource.data.region in myRegions());
+      allow create: if isAdmin() || (isUser() && request.resource.data.createdBy == myEmail() && canWriteDemoType(request.resource.data));
+      allow update: if isAdmin()
+                    || (isUser() && resource.data.createdBy == myEmail() && request.resource.data.createdBy == myEmail() && canWriteDemoType(request.resource.data));
+      allow delete: if isAdmin() || (isUser() && resource.data.createdBy == myEmail());
+    }
+
+    // ---- Demo 行程：規則同 Demo 紀錄 ----
+    match /schedules/{id} {
+      allow read: if isUser();
+      allow create: if isUser() && request.resource.data.createdBy == myEmail();
+      allow update: if isAdmin()
+                    || (isUser() && resource.data.createdBy == myEmail() && request.resource.data.createdBy == myEmail())
+                    // 業務主管：可修改負責區域內的行程（區域要維持在自己負責的範圍、不能改建立者）
+                    || (isManager() && resource.data.get('region', '') in myRegions()
+                        && request.resource.data.get('region', '') in myRegions()
+                        && request.resource.data.createdBy == resource.data.createdBy);
+      allow delete: if isAdmin() || (isUser() && resource.data.createdBy == myEmail());
+    }
+
+    // ---- 私人行程：只有本人能看、能改 ----
+    match /privateSchedules/{id} {
+      allow read, update, delete: if isUser() && resource.data.owner == myEmail();
+      allow create: if isUser() && request.resource.data.owner == myEmail();
+    }
+
+    // ---- 個人設定（例：每週從星期一開始）：只有本人 ----
+    match /prefs/{email} {
+      allow read, write: if isUser() && email == myEmail();
+    }
+
+    // ---- 系統內通知：只看得到、改得到寄給自己的；建立時寄件者必須是自己 ----
+    match /notifications/{id} {
+      allow read, update, delete: if isUser() && resource.data.to == myEmail();
+      allow create: if isUser() && request.resource.data.from == myEmail();
+    }
+
+    // ---- 原廠單號登記表（由 Apps Script 寫入）：管理者、工程師可看 ----
+    match /ironTickets/{no} {
+      allow read: if isAdmin() || isEngineer();
+    }
+
+    // ---- LINE 官方帳號紀錄（由 Apps Script 寫入）：管理者、工程師可看；可設定對話連結的客戶 ----
+    match /lineChats/{id} {
+      allow read, delete: if isAdmin() || isEngineer();
+      allow update: if (isAdmin() || isEngineer())
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerId', 'customerName', 'linkedBy', 'linkedAt', 'name', 'handlers']);
+    }
+    match /lineMsgs/{id} {
+      allow read, delete: if isAdmin() || isEngineer();
+      allow update: if (isAdmin() || isEngineer())
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'excluded', 'editedBy', 'editedAt']);
+    }
+
+    // ---- 公布欄／跑馬燈：大家可看，只有管理者能發布、修改、刪除 ----
+    match /announcements/{id} {
+      allow read: if isUser();
+      allow write: if isAdmin();
+    }
+
+    // ---- 報價單、報價範本：目前只有管理者 ----
+    match /quotes/{id} {
+      allow read, write: if isAdmin();
+    }
+    match /quoteTemplates/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // ---- 編號計數器：只有管理者 ----
+    match /counters/{id} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
