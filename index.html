@@ -279,7 +279,7 @@ dialog.mapsheet .btn{background:var(--navy);color:#fff}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-12c</div>
+<div class="ver">版本 2026-11-16a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1848,7 +1848,9 @@ async function viewCalSearch() {
 const canDelSched = x => x._private || isAdmin() || x.createdBy === me.email;
 // 業務主管：可修改負責區域內的行程（不能刪除）
 const canEditSched = x => canDelSched(x) || (me.role === 'manager' && !!x.region && userRegions(me).includes(x.region));
-const SCHED_FIELDS = ['title', 'type', 'region', 'date', 'endDate', 'startTime', 'endTime', 'salesEmail', 'engineerEmail', 'place', 'url', 'content'];
+// Demo 行程的客戶資料欄位（轉潛在客戶時直接帶入同名欄位）
+const SCHED_CUST = [['currentSoftware', '現用軟體'], ['industry', '行業別'], ['email', 'E-Mail'], ['phone', '電話'], ['mobile', '行動電話']];
+const SCHED_FIELDS = ['title', 'type', 'region', 'date', 'endDate', 'startTime', 'endTime', 'salesEmail', 'engineerEmail', 'place', 'url', 'content', ...SCHED_CUST.map(([k]) => k)];
 function scheduleDetail(x) {
   const dlg = document.createElement('dialog');
   const f = (l, v) => `<div class="field"><label>${l}</label><div class="val">${esc(v) || '<span class="muted">—</span>'}</div></div>`;
@@ -1857,6 +1859,7 @@ function scheduleDetail(x) {
     <p class="muted">${esc(x.date)}（${wd(x.date)}）${endOf(x) !== x.date ? `～${esc(endOf(x))}（${wd(endOf(x))}）` : ''}　${esc(timeText(x))}</p>
     <div class="grid">${f('區域', x.region)}${f('業務', salesLabel(x.salesEmail))}${f('工程師', salesLabel(x.engineerEmail))}<div class="field"><label>地點</label><div class="val">${mapLink(x.place)}</div></div>
       <div class="field full"><label>網址</label><div class="val">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a>` : '<span class="muted">—</span>'}</div></div>
+      ${SCHED_CUST.some(([k]) => x[k]) ? SCHED_CUST.map(([k, t]) => f(t, x[k])).join('') : ''}
       <div class="field full"><label>內容</label><div class="val" style="white-space:pre-wrap">${esc(x.content) || '<span class="muted">—</span>'}</div></div>
       ${f('建立者', salesLabel(x.createdBy))}</div>
     <div class="row-actions" style="margin-top:24px;justify-content:flex-end">
@@ -1928,6 +1931,10 @@ function scheduleToCustomer(x) {
     const mob = parts.find(p => /^09/.test(p.replace(/\D/g, '')));
     if (mob && !out.mobile) { out.mobile = mob; out.phone = parts.filter(p => p !== mob).join(' / '); }
   }
+  // 行程上的欄位優先於內容文字
+  for (const [k] of SCHED_CUST) if (String(x[k] || '').trim()) out[k] = String(x[k]).trim();
+  // 行程「網址」→ 公司官網（線上會議連結除外）
+  if (x.url && !/(meet\.google|teams\.microsoft|teams\.live|zoom\.us|webex)\./i.test(x.url)) out.website = x.url;
   if (!out.address && x.place) out.address = x.place;
   if (!out.name) out.name = String(x.title || '').split(/[-－\[［(（]/)[0].trim();
   return out;
@@ -1954,6 +1961,7 @@ function scheduleForm(r, preset = {}) {
       <div class="field"><label>工程師</label><select name="engineerEmail"><option value="">（未指定）</option>${userOptions(['engineer'], cur.engineerEmail)}</select></div>
       <div class="field full"><label>地點</label><input name="place" value="${esc(cur.place || '')}"></div>
       <div class="field full"><label>網址</label><input name="url" type="url" value="${esc(cur.url || '')}" placeholder="https://"></div>
+      ${SCHED_CUST.map(([k, t]) => `<div class="field schedCust"><label>${t}</label><input name="${k}" value="${esc(cur[k] || '')}"${k === 'email' ? ' type="email"' : ''}></div>`).join('')}
       <div class="field full"><label>內容</label><textarea name="content" rows="8" placeholder="客戶名稱、聯絡窗口、電話、備註…">${esc(cur.content || '')}</textarea></div>
       <div class="field full">
         <div class="checks"><label><input type="checkbox" name="private" ${cur._private ? 'checked' : ''} ${!isNew && !r._private && r.createdBy !== me.email ? 'disabled' : ''}>🔒 私人行程（只有自己看得到；不寄信、不通知、不同步 Google 日曆）</label></div>
@@ -1972,6 +1980,8 @@ function scheduleForm(r, preset = {}) {
       : (isNew || r?.tentative || r?._private) ? '儲存後會以系統通知＋Email 通知所選的業務、工程師。' : '';
   };
   form.private.addEventListener('change', note); form.tentative.addEventListener('change', note); note();
+  const custRows = () => dlg.querySelectorAll('.schedCust').forEach(el => el.classList.toggle('hidden', form.type.value !== 'demo'));
+  form.type.addEventListener('change', custRows); custRows();
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.querySelector('#cancel').onclick = close;
   dlg.addEventListener('cancel', () => dlg.remove());
@@ -1980,6 +1990,7 @@ function scheduleForm(r, preset = {}) {
     const v = k => String(form[k].value || '').trim();
     const data = { title: v('title'), type: v('type'), region: v('region'), date: v('date'), endDate: v('endDate'), startTime: v('startTime'), endTime: v('endTime'),
       salesEmail: v('salesEmail'), engineerEmail: v('engineerEmail'), place: v('place'), url: v('url'), content: v('content') };
+    for (const [k] of SCHED_CUST) data[k] = v(k);
     if (!data.title) return toast('請填寫標題');
     if (!data.date) return toast('請選擇開始日期');
     if (data.endDate && data.endDate < data.date) return toast('結束日期不能早於開始日期');
