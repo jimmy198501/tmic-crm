@@ -279,7 +279,7 @@ dialog.mapsheet .btn{background:var(--navy);color:#fff}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-16a</div>
+<div class="ver">版本 2026-11-16b</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -1849,7 +1849,7 @@ const canDelSched = x => x._private || isAdmin() || x.createdBy === me.email;
 // 業務主管：可修改負責區域內的行程（不能刪除）
 const canEditSched = x => canDelSched(x) || (me.role === 'manager' && !!x.region && userRegions(me).includes(x.region));
 // Demo 行程的客戶資料欄位（轉潛在客戶時直接帶入同名欄位）
-const SCHED_CUST = [['currentSoftware', '現用軟體'], ['industry', '行業別'], ['email', 'E-Mail'], ['phone', '電話'], ['mobile', '行動電話']];
+const SCHED_CUST = [['contact', '聯絡人'], ['companyProduct', '公司產品'], ['currentSoftware', '現用軟體'], ['industry', '行業別'], ['email', 'E-Mail'], ['phone', '電話'], ['mobile', '行動電話']];
 const SCHED_FIELDS = ['title', 'type', 'region', 'date', 'endDate', 'startTime', 'endTime', 'salesEmail', 'engineerEmail', 'place', 'url', 'content', ...SCHED_CUST.map(([k]) => k)];
 function scheduleDetail(x) {
   const dlg = document.createElement('dialog');
