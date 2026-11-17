@@ -279,7 +279,7 @@ dialog.mapsheet .btn{background:var(--navy);color:#fff}
 <div id="marq" class="marq hidden"><span id="marqText"></span></div>
 <main id="app"></main>
 <div class="toast" id="toast"></div>
-<div class="ver">版本 2026-11-16b</div>
+<div class="ver">版本 2026-11-17a</div>
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -579,6 +579,54 @@ const COLS = [
   ['region', '區域', c => c.region], ['sales', '負責業務', c => salesLabel(c.salesEmail)],
   ['contact', '聯絡人', c => c.contact], ['phone', '電話', c => c.phone], ['maint', '維護日期', c => c.maintenanceDate]
 ];
+// 批次轉移客戶的負責業務（管理者）：list＝要轉的客戶
+function transferCustomers(list, onDone) {
+  list = list.filter(c => c && !c.deleted);
+  if (!list.length) return toast('沒有要轉移的客戶');
+  const regs = [...new Set(list.map(c => c.region).filter(Boolean))];
+  const froms = [...new Set(list.map(c => c.salesEmail || ''))];
+  const sameR = u => userRegions(u).some(r => regs.includes(r));
+  const cands = [...users.values()].filter(u => (u.role === 'sales' || u.role === 'manager' || u.alsoSales) && u.active !== false && !(froms.length === 1 && froms[0] === u.email))
+    .sort((a, b) => (sameR(b) - sameR(a)) || (a.nameZh || '').localeCompare(b.nameZh || '', 'zh-Hant'));
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form id="xf"><h1>轉給其他業務</h1>
+    <p>共 <b>${list.length}</b> 位客戶${regs.length ? `（區域：${esc(regs.join('、'))}）` : ''}</p>
+    <p class="muted">目前負責：${froms.map(e => e ? esc(salesLabel(e)) : '（未指定）').join('、')}</p>
+    <div class="field"><label>轉給 *</label><select name="to"><option value="">（請選擇）</option>${cands.map(u => `<option value="${esc(u.email)}">${esc(salesLabel(u.email))}${userRegions(u).length ? `（${esc(userRegions(u).join('、'))}）` : ''}</option>`).join('')}</select>
+      ${regs.length ? '<div class="muted">同區域的業務排在前面</div>' : ''}</div>
+    <p class="muted">只會改客戶的「負責業務」；過去的 Demo 紀錄、行程不會變動。</p>
+    <div class="row-actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="ghost" id="xc">取消</button><button type="submit" class="accent" id="xs">確定轉移</button></div></form>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('#xc').onclick = close;
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.querySelector('#xf').addEventListener('submit', async e => {
+    e.preventDefault();
+    const to = e.target.to.value;
+    if (!to) return toast('請選擇要轉給誰');
+    const todo = list.filter(c => c.salesEmail !== to);
+    if (!todo.length) return toast('這些客戶已經是這位業務負責');
+    if (!confirm(`確定把 ${todo.length} 位客戶的負責業務改成「${salesLabel(to)}」？`)) return;
+    dlg.querySelector('#xs').disabled = true;
+    let done = 0;
+    try {
+      for (let i = 0; i < todo.length; i += 400) {
+        const b = writeBatch(db);
+        todo.slice(i, i + 400).forEach(c => b.update(doc(db, 'customers', c.id), { salesEmail: to, updatedBy: me.email, updatedAt: serverTimestamp() }));
+        await b.commit(); done += Math.min(400, todo.length - i);
+      }
+      close();
+      try { await syncCustomers(); } catch (e2) { /* 下次重新整理就會更新 */ }
+      toast(`已把 ${done} 位客戶轉給 ${salesLabel(to)}`, 6000);
+      onDone?.();
+    } catch (err) {
+      toast((done ? `已轉移 ${done} 位，其餘失敗：` : '轉移失敗：') + errMsg(err), 10000);
+      dlg.querySelector('#xs').disabled = false;
+    }
+  });
+  dlg.showModal();
+}
+const custSel = new Set(); // 客戶列表勾選（批次轉移用）
 function viewCustomers() {
   const leftN = isAdmin() ? leftCustomers().length : 0;
   const checkN = isAdmin() ? [...customers.values()].filter(c => !c.deleted && c.needsCheck).length : 0;
@@ -592,6 +640,7 @@ function viewCustomers() {
       <button class="ghost" id="refresh">重新整理</button>
       ${isAdmin() ? '<button id="add">＋ 新增客戶</button>' : ''}
     </div>
+    ${isAdmin() ? '<div class="toolbar hidden" id="selBar"><span id="selN"></span><button class="accent" id="xfer">轉給其他業務</button><button class="ghost small" id="selClr">取消勾選</button></div>' : ''}
     <div class="muted" id="count"></div>
     <div class="tablewrap"><table><thead><tr id="thead"></tr></thead><tbody id="tbody" class="click"></tbody></table></div>
   </div>`;
@@ -606,11 +655,27 @@ function viewCustomers() {
   });
   $('#add')?.addEventListener('click', () => customerForm(null));
   $('#thead').addEventListener('click', e => {
+    if (e.target.id === 'selAll') { // 全選／取消全選「目前篩選出來的」客戶
+      const ids = [...$('#tbody').querySelectorAll('tr[data-id]')].map(tr => tr.dataset.id);
+      ids.forEach(id => e.target.checked ? custSel.add(id) : custSel.delete(id));
+      renderTable(); return;
+    }
     const k = e.target.closest('th')?.dataset.k; if (!k) return;
     if (ui.sort === k) ui.dir = -ui.dir; else { ui.sort = k; ui.dir = 1; }
     renderTable();
   });
-  $('#tbody').addEventListener('click', e => { const id = e.target.closest('tr')?.dataset.id; if (id) location.hash = '#/customer/' + encodeURIComponent(id); });
+  $('#tbody').addEventListener('click', e => {
+    const id = e.target.closest('tr')?.dataset.id; if (!id) return;
+    if (e.target.closest('.selc')) { // 勾選欄：不開客戶頁
+      const cb = e.target.closest('.selc').querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      cb.checked ? custSel.add(id) : custSel.delete(id);
+      renderSel(); return;
+    }
+    location.hash = '#/customer/' + encodeURIComponent(id);
+  });
+  $('#xfer')?.addEventListener('click', () => transferCustomers([...custSel].map(id => customers.get(id)), () => { custSel.clear(); viewCustomers(); }));
+  $('#selClr')?.addEventListener('click', () => { custSel.clear(); renderTable(); });
   renderTable();
 }
 function renderTable() {
@@ -622,13 +687,24 @@ function renderTable() {
     .filter(c => !q || [custNo(c), c.leadNo, c.name, c.contact, c.phone, c.mobile].some(v => String(v || '').toLowerCase().includes(q)));
   const col = COLS.find(c => c[0] === ui.sort) || COLS[0];
   list.sort((a, b) => String(col[2](a) || '').localeCompare(String(col[2](b) || ''), 'zh-Hant', { numeric: true }) * ui.dir);
-  $('#thead').innerHTML = COLS.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${ui.sort === k ? `<span class="arrow">${ui.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('');
+  const adm = isAdmin();
+  const allOn = adm && list.length > 0 && list.every(c => custSel.has(c.id));
+  $('#thead').innerHTML = (adm ? `<th class="selc" style="width:36px"><input type="checkbox" id="selAll" title="全選目前列出的客戶" ${allOn ? 'checked' : ''}></th>` : '') + COLS.map(([k, t]) => `<th class="sortable" data-k="${k}">${t}${ui.sort === k ? `<span class="arrow">${ui.dir > 0 ? ' ▲' : ' ▼'}</span>` : ''}</th>`).join('');
   $('#tbody').innerHTML = list.map(c => `<tr data-id="${esc(c.id)}">
-    <td>${esc(custNo(c))}</td><td>${esc(c.name)}</td>
+    ${adm ? `<td class="selc"><input type="checkbox" ${custSel.has(c.id) ? 'checked' : ''}></td>` : ''}<td>${esc(custNo(c))}</td><td>${esc(c.name)}</td>
     <td><span class="tag ${c.status === 'formal' ? 'formal' : 'potential'}">${c.status === 'formal' ? '正式' : '潛在'}</span></td>
     <td>${esc(c.region)}</td><td>${esc(salesLabel(c.salesEmail))}</td><td>${esc(c.contact)}</td><td>${esc(c.phone)}</td><td>${esc(c.maintenanceDate)}</td>
-  </tr>`).join('') || '<tr><td colspan="8" class="muted">沒有資料</td></tr>';
+  </tr>`).join('') || `<tr><td colspan="${adm ? 9 : 8}" class="muted">沒有資料</td></tr>`;
   $('#count').textContent = `共 ${list.length} 筆`;
+  renderSel();
+}
+function renderSel() { // 勾選列：已選幾位、全選框狀態
+  const bar = $('#selBar'); if (!bar) return;
+  [...custSel].forEach(id => { const c = customers.get(id); if (!c || c.deleted) custSel.delete(id); });
+  bar.classList.toggle('hidden', !custSel.size);
+  $('#selN').textContent = `已勾選 ${custSel.size} 位客戶`;
+  const ids = [...$('#tbody').querySelectorAll('tr[data-id]')].map(tr => tr.dataset.id);
+  const all = $('#selAll'); if (all) all.checked = ids.length > 0 && ids.every(id => custSel.has(id));
 }
 
 // ---------------- 客戶詳細頁 ----------------
@@ -3040,7 +3116,7 @@ function viewUsers() {
     <div class="tablewrap"><table><thead><tr><th>中文名</th><th>英文名</th><th>Google 帳號</th><th>公司信箱</th><th>通知寄到</th><th>角色</th><th>區域</th><th>狀態</th><th></th></tr></thead>
     <tbody id="ubody">${list.map(u => `<tr data-e="${esc(u.email)}" class="${u.active === false ? 'left' : ''}"><td>${esc(u.nameZh)}</td><td>${esc(u.nameEn)}</td><td>${esc(u.email)}</td><td>${esc(u.companyEmail || '')}</td><td>${[u.notifyGmail !== false ? 'Gmail' : '', u.notifyCompany && u.companyEmail ? '公司' : ''].filter(Boolean).join('＋') || '不寄'}</td><td>${ROLE[u.role] || esc(u.role)}${u.alsoSales && !['sales', 'manager'].includes(u.role) ? '＋業務' : ''}${u.alsoEngineer && u.role !== 'engineer' ? '＋工程師' : ''}</td><td>${esc(userRegions(u).join('、'))}</td>
       <td>${u.active === false ? (() => { const n = leftCustomers().filter(c => c.salesEmail === u.email).length; return '離職' + (n ? `　<a href="#" data-a="cust">${n} 位客戶待調整</a>` : ''); })() : '在職'}</td>
-      <td class="row-actions"><button class="ghost" data-a="edit">編輯</button>${u.email === me.email ? '' : '<button class="danger" data-a="del">刪除</button>'}</td></tr>`).join('')}</tbody></table></div>
+      <td class="row-actions">${(() => { const n = [...customers.values()].filter(c => !c.deleted && c.salesEmail === u.email).length; return n ? `<button class="${u.active === false ? 'accent' : 'ghost'}" data-a="xfer">全部 ${n} 位客戶轉給…</button>` : ''; })()}<button class="ghost" data-a="edit">編輯</button>${u.email === me.email ? '' : '<button class="danger" data-a="del">刪除</button>'}</td></tr>`).join('')}</tbody></table></div>
     <p class="muted">共 ${list.length} 人</p>
   </div>`;
   $('#addU').addEventListener('click', () => userForm(null));
@@ -3049,7 +3125,8 @@ function viewUsers() {
     if (!a || !email) return;
     const u = users.get(email);
     if (a === 'edit') userForm(u);
-    if (a === 'cust') { e.preventDefault(); ui.sales = '__left'; ui.status = 'all'; location.hash = '#/customers'; return; }
+    if (a === 'cust') { e.preventDefault(); ui.sales = email; ui.region = ''; ui.q = ''; ui.status = 'all'; location.hash = '#/customers'; return; }
+    if (a === 'xfer') { transferCustomers([...customers.values()].filter(c => !c.deleted && c.salesEmail === email), () => viewUsers()); return; }
     if (a === 'del') {
       const n = [...customers.values()].filter(c => !c.deleted && c.salesEmail === email).length;
       if (n && !confirm(`${salesLabel(email)} 目前仍負責 ${n} 位客戶，刪除後這些客戶的負責業務會變成無法辨識。\n\n建議改用「編輯 → 狀態：離職」保留此人。\n\n仍要刪除嗎？`)) return;
@@ -3139,7 +3216,7 @@ function userForm(u) {
       await setDoc(doc(db, 'users', email), data, { merge: true });
       close();
       const n = form.active.value === '0' ? [...customers.values()].filter(c => !c.deleted && c.salesEmail === email).length : 0;
-      if (n) { alert(`${nameZh} 已設為離職。\n\n他目前負責 ${n} 位客戶，請到「客戶」頁點「查看名單」調整負責業務。`); }
+      if (n) { alert(`${nameZh} 已設為離職。\n\n他目前負責 ${n} 位客戶，請在「人員管理」按他那一列的「全部 ${n} 位客戶轉給…」，或到「客戶」頁勾選後分批轉給其他業務。`); }
       else toast('已儲存');
     } catch (err) { toast(errMsg(err)); dlg.querySelector('#save').disabled = false; }
   });
